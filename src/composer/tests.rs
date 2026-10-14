@@ -230,3 +230,34 @@ fn shot() {
         c.show(&mut r, |ui| page(ui, &mut sun, &mut sky, &mut soft, &mut shadows));
     });
 }
+
+#[test]
+fn a_hidden_run_of_a_page_leaves_its_props_rects_alone() {
+    use crate::props::{rects, Sheet};
+    let ctx = egui::Context::default();
+    let mut c = Composer::default();
+    c.push(Entry { key: "Page/gain".into(), name: "gain".into() });
+    let mut v = 0.5;
+    let mut page = None;
+    for _ in 0..2 {
+        frame(&ctx, vec![], Modifiers::NONE, |ui| {
+            let (l, r) = ui.max_rect().split_left_right_at_fraction(0.5);
+            ui.scope_builder(UiBuilder::new().max_rect(l), |ui| {
+                scope(ui, "Page", |ui| {
+                    Sheet::new(ui).slider("gain", &mut v, (0.0, 1.0), false);
+                });
+            });
+            page = rects(ui.ctx(), egui::Id::new("gain")).map(|r| r.row);
+            ui.scope_builder(UiBuilder::new().max_rect(r), |ui| {
+                c.show(ui, |ui| {
+                    scope(ui, "Page", |ui| {
+                        Sheet::new(ui).slider("gain", &mut v, (0.0, 1.0), false);
+                    });
+                });
+            });
+        });
+    }
+    let after = rects(&ctx, egui::Id::new("gain")).map(|r| r.row);
+    assert!(page.is_some());
+    assert_eq!(page, after, "the composer's run moved the page row's rect");
+}

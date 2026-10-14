@@ -324,7 +324,11 @@ impl<'a> Sheet<'a> {
             });
             tip::tip_row(ui, &row.response, tip_text);
             let (dot, label, control, key) = row.inner;
-            remember(ui, id, RowRects { row: row.response.rect, dot, label, control, key });
+            // A composer's hidden run of the page must not move where the
+            // page's own row is remembered (its slot copy is not the row).
+            if !crate::composer::harvesting(ui) {
+                remember(ui, id, RowRects { row: row.response.rect, dot, label, control, key });
+            }
         });
         self.events.extend(events.into_iter().map(|e| (id, e)));
     }

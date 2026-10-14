@@ -25,6 +25,16 @@ pub enum Tab {
     Canvas,
     Keys,
     Nothing,
+    Props,
+    Outliner,
+    Table,
+    Timeline,
+    Image,
+    Palette,
+    Dialogs,
+    Toasts,
+    Theme,
+    Keymap,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -32,13 +42,32 @@ pub enum Role {
     Main,
     Side,
     Spare,
+    Views,
     Detached,
 }
 
 impl dock::Tab for Tab {
     type Role = Role;
     fn all() -> &'static [Self] {
-        &[Tab::Widgets, Tab::Colour, Tab::Text, Tab::Files, Tab::Canvas, Tab::Keys, Tab::Nothing]
+        &[
+            Tab::Widgets,
+            Tab::Colour,
+            Tab::Text,
+            Tab::Files,
+            Tab::Canvas,
+            Tab::Keys,
+            Tab::Nothing,
+            Tab::Props,
+            Tab::Outliner,
+            Tab::Table,
+            Tab::Timeline,
+            Tab::Image,
+            Tab::Palette,
+            Tab::Dialogs,
+            Tab::Toasts,
+            Tab::Theme,
+            Tab::Keymap,
+        ]
     }
     fn title(self) -> &'static str {
         match self {
@@ -49,6 +78,16 @@ impl dock::Tab for Tab {
             Tab::Canvas => "Canvas",
             Tab::Keys => "Keys",
             Tab::Nothing => "Nothing",
+            Tab::Props => "Props",
+            Tab::Outliner => "Outliner",
+            Tab::Table => "Table",
+            Tab::Timeline => "Timeline",
+            Tab::Image => "Image",
+            Tab::Palette => "Palette",
+            Tab::Dialogs => "Dialogs",
+            Tab::Toasts => "Toasts",
+            Tab::Theme => "Theme",
+            Tab::Keymap => "Keymap",
         }
     }
     fn help(self) -> &'static str {
@@ -60,6 +99,16 @@ impl dock::Tab for Tab {
             Tab::Canvas => "a pan / zoom canvas on Blender's hands: MMB pan, ctrl+MMB zoom, wheel zoom",
             Tab::Keys => "hotkey caps: the top strip and the key strip",
             Tab::Nothing => "a tab with nothing in it, for moving about",
+            Tab::Props => "the properties / inspector panel pattern",
+            Tab::Outliner => "a tree view: select, rename, drag to reorder",
+            Tab::Table => "a table: sortable columns, virtual rows",
+            Tab::Timeline => "a timeline: range, playhead, keys, scrub",
+            Tab::Image => "an image viewer: zoom, pan, pixel readout",
+            Tab::Palette => "a command palette: fuzzy search over actions",
+            Tab::Dialogs => "modal confirm, progress, a settings frame",
+            Tab::Toasts => "toasts and the status bar",
+            Tab::Theme => "the theme engine: slots, links, the colours window",
+            Tab::Keymap => "the key map engine: bindings, conflicts, rebinding",
         }
     }
     fn home(self) -> Role {
@@ -67,6 +116,7 @@ impl dock::Tab for Tab {
             Tab::Widgets | Tab::Colour | Tab::Text | Tab::Files => Role::Main,
             Tab::Canvas | Tab::Keys => Role::Side,
             Tab::Nothing => Role::Spare,
+            _ => Role::Views,
         }
     }
 }
@@ -77,6 +127,7 @@ impl dock::Role for Role {
             Role::Main => "playground",
             Role::Side => "playground — side",
             Role::Spare => "playground — spare",
+            Role::Views => "playground — views",
             Role::Detached => "playground",
         }
     }
@@ -85,6 +136,7 @@ impl dock::Role for Role {
             Role::Main => (1100, 720),
             Role::Side => (640, 720),
             Role::Spare => (400, 300),
+            Role::Views => (900, 700),
             Role::Detached => (520, 600),
         }
     }
@@ -134,6 +186,7 @@ pub struct Playground {
     /// Canvas nodes: where each is, in canvas units.
     pub nodes: Vec<egui::Vec2>,
     pub held: Option<usize>,
+    pub views: crate::views::Views,
 }
 
 impl Default for Playground {
@@ -171,6 +224,7 @@ impl Default for Playground {
             reveal: Reveal::default(),
             nodes: vec![egui::vec2(0.0, 0.0), egui::vec2(240.0, 80.0), egui::vec2(-160.0, 200.0), egui::vec2(80.0, -240.0)],
             held: None,
+            views: Default::default(),
         }
     }
 }
@@ -215,12 +269,26 @@ impl Panels<Tab> for Playground {
             Tab::Nothing => {
                 ui.centered_and_justified(|ui| ui.weak("nothing here"));
             }
+            Tab::Props => crate::views::props::ui(ui, &mut self.views.props),
+            Tab::Outliner => crate::views::outliner::ui(ui, &mut self.views.outliner),
+            Tab::Table => crate::views::table::ui(ui, &mut self.views.table),
+            Tab::Timeline => crate::views::timeline::ui(ui, &mut self.views.timeline),
+            Tab::Image => crate::views::imageview::ui(ui, &mut self.views.imageview),
+            Tab::Palette => crate::views::palette::ui(ui, &mut self.views.palette),
+            Tab::Dialogs => crate::views::dialog::ui(ui, &mut self.views.dialog),
+            Tab::Toasts => crate::views::toast::ui(ui, &mut self.views.toast),
+            Tab::Theme => crate::views::theme::ui(ui, &mut self.views.theme),
+            Tab::Keymap => crate::views::keymap::ui(ui, &mut self.views.keymap),
         }
+    }
+
+    fn end(&mut self, ui: &mut Ui) {
+        crate::views::toast::overlay(ui, &mut self.views.toast);
     }
 
     fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
         match tab {
-            Tab::Widgets | Tab::Colour | Tab::Text => [false, true],
+            Tab::Widgets | Tab::Colour | Tab::Text | Tab::Props | Tab::Dialogs | Tab::Toasts => [false, true],
             _ => [false, false],
         }
     }

@@ -46,6 +46,16 @@ fn tab_id(t: Tab) -> &'static str {
         Tab::Canvas => "tab-canvas",
         Tab::Keys => "tab-keys",
         Tab::Nothing => "tab-nothing",
+        Tab::Props => "tab-props",
+        Tab::Outliner => "tab-outliner",
+        Tab::Table => "tab-table",
+        Tab::Timeline => "tab-timeline",
+        Tab::Image => "tab-image",
+        Tab::Palette => "tab-palette",
+        Tab::Dialogs => "tab-dialogs",
+        Tab::Toasts => "tab-toasts",
+        Tab::Theme => "tab-theme",
+        Tab::Keymap => "tab-keymap",
     }
 }
 

@@ -27,6 +27,17 @@
 //! and key maps stay in the apps for now; see the README.
 
 pub mod bg;
+pub mod dialog;
+pub mod imageview;
+pub mod keymap;
+pub mod outliner;
+pub mod palette;
+pub mod props;
+pub mod statusbar;
+pub mod table;
+pub mod theme;
+pub mod timeline;
+pub mod toast;
 pub mod colorpicker;
 pub mod eyedrop;
 pub mod filedialog;

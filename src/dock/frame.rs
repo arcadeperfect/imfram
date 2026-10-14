@@ -41,6 +41,12 @@ pub trait Panels<T: Tab> {
     fn tab(&mut self, ui: &mut Ui, tab: T);
     /// After the dock (an editor's frame ends; floating windows).
     fn end(&mut self, _ui: &mut Ui) {}
+    /// Whether a tab's body is left unpainted, so what the app drew into
+    /// the window before egui (a picture blitted straight to the surface)
+    /// shows through. The tab bar and the outline are still drawn.
+    fn see_through(&self, _tab: &T) -> bool {
+        false
+    }
     /// Whether a tab's body scrolls (a canvas says no).
     fn scroll_bars(&self, _tab: &T) -> [bool; 2] {
         [false, false]
@@ -143,7 +149,7 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
             (None, Some((t, p))) => (Some(t), Some(p)),
             _ => (None, None),
         };
-        let real = self.tree.layout(area, GAP);
+        let real = self.tree.layout_fixed(area, GAP, &strip_height::<T>);
         let inside = at.is_some_and(|p| area.contains(p));
         let drop = match (drag, at) {
             (Some(tab), Some(p)) if inside => drop_at(&real, area, p, self.tree.find(tab)),
@@ -179,8 +185,8 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         }
         let solo = self.anim.solo.filter(|_| drag.is_none());
         let mut target = match &proposal {
-            Some(p) => p.layout(area, GAP),
-            None => self.tree.layout(area, GAP),
+            Some(p) => p.layout_fixed(area, GAP, &strip_height::<T>),
+            None => self.tree.layout_fixed(area, GAP, &strip_height::<T>),
         };
         if let Some(l) = solo {
             target.seps.clear();
@@ -300,7 +306,10 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         let (bar, body) = (Rect::from_min_size(rect.min, vec2(rect.width(), BAR_H)), Rect::from_min_max(pos2(rect.min.x, rect.min.y + BAR_H), rect.max));
         let vis = ui.visuals().clone();
         let p = ui.painter_at(rect);
-        p.rect_filled(rect, 4.0, vis.window_fill);
+        let clear = tabs.get(active).is_some_and(|t| self.panels.see_through(t));
+        if !clear {
+            p.rect_filled(rect, 4.0, vis.window_fill);
+        }
         p.rect_filled(bar, egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 }, vis.faint_bg_color);
         p.rect_stroke(rect, 4.0, vis.window_stroke, egui::StrokeKind::Inside);
 
@@ -391,6 +400,16 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
             self.panels.tab(&mut child, tab);
         }
     }
+}
+
+/// A leaf of nothing but strips (`Tab::strip`): its whole height, the
+/// tab bar and the body's margins included.
+fn strip_height<T: Tab>(tabs: &[T]) -> Option<f32> {
+    let mut h: Option<f32> = None;
+    for t in tabs {
+        h = Some(h.unwrap_or(0.0).max(t.strip()?));
+    }
+    h.map(|h| h + BAR_H + 4.0)
 }
 
 /// The ghost: where the dragged tab's new leaf would be.

@@ -241,9 +241,16 @@ impl<T: Copy + PartialEq> Tree<T> {
     /// Where each leaf and separator goes in `rect`; `gap` the band
     /// between a split's children.
     pub fn layout(&self, rect: Rect, gap: f32) -> Layout {
+        self.layout_fixed(rect, gap, &|_| None)
+    }
+
+    /// `layout`, where `fixed` gives a leaf (by its tabs) a height of its
+    /// own: in a split above or below it, that leaf gets exactly that
+    /// height and the split no divider (its share is not the user's).
+    pub fn layout_fixed(&self, rect: Rect, gap: f32, fixed: &dyn Fn(&[T]) -> Option<f32>) -> Layout {
         let mut out = Layout { leaves: Vec::new(), seps: Vec::new() };
         if let Some(r) = &self.root {
-            place(r, rect, gap, &mut Vec::new(), &mut out);
+            place(r, rect, gap, fixed, &mut Vec::new(), &mut out);
         }
         out
     }
@@ -356,17 +363,32 @@ impl<T: Copy> Node<T> {
     }
 }
 
-fn place<T>(n: &Node<T>, rect: Rect, gap: f32, path: &mut Path, out: &mut Layout) {
+fn place<T>(n: &Node<T>, rect: Rect, gap: f32, fixed: &dyn Fn(&[T]) -> Option<f32>, path: &mut Path, out: &mut Layout) {
     match n {
         Node::Leaf { id, .. } => out.leaves.push((*id, rect)),
         Node::Split { dir, frac, a, b } => {
-            let (ra, sep, rb) = cut(rect, *dir, *frac, gap);
-            out.seps.push((path.clone(), sep, rect, *dir));
+            let height = |n: &Node<T>| match n {
+                Node::Leaf { tabs, .. } => fixed(tabs),
+                Node::Split { .. } => None,
+            };
+            let room = (rect.height() - gap).max(1.0);
+            let pinned = match dir {
+                Dir::Col => match (height(a), height(b)) {
+                    (Some(h), _) => Some((h / room).clamp(0.0, 1.0)),
+                    (None, Some(h)) => Some(1.0 - (h / room).clamp(0.0, 1.0)),
+                    _ => None,
+                },
+                Dir::Row => None,
+            };
+            let (ra, sep, rb) = cut(rect, *dir, pinned.unwrap_or(*frac), gap);
+            if pinned.is_none() {
+                out.seps.push((path.clone(), sep, rect, *dir));
+            }
             path.push(false);
-            place(a, ra, gap, path, out);
+            place(a, ra, gap, fixed, path, out);
             path.pop();
             path.push(true);
-            place(b, rb, gap, path, out);
+            place(b, rb, gap, fixed, path, out);
             path.pop();
         }
     }
@@ -413,6 +435,20 @@ mod tests {
         let (_, right) = l.leaves[1];
         assert!((left.width() - 57.6).abs() < 0.01, "0.6 of the 96 left after the gap");
         assert_eq!(right.min.x, left.max.x + 4.0);
+    }
+
+    #[test]
+    fn a_strip_keeps_its_height_whatever_the_window_and_has_no_divider() {
+        let mut t: Tree<&str> = Tree::new(vec!["top"]);
+        t.split(Side::Bottom, 0.5, vec!["strip"]);
+        t.split(Side::Bottom, 0.7, vec!["bottom"]);
+        let fixed = |tabs: &[&str]| (tabs == ["strip"]).then_some(30.0);
+        for h in [200.0, 900.0] {
+            let l = t.layout_fixed(Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(100.0, h)), 4.0, &fixed);
+            let strip = l.leaves.iter().find(|(id, _)| Some(*id) == t.find("strip")).unwrap().1;
+            assert!((strip.height() - 30.0).abs() < 0.01, "{h}: {}", strip.height());
+            assert_eq!(l.seps.len(), 1, "only the outer split can be dragged");
+        }
     }
 
     #[test]

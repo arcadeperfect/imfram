@@ -63,6 +63,12 @@ pub trait Tab: Copy + Eq + Hash + Debug + Serialize + serde::de::DeserializeOwne
     /// The window it goes back to: when opened again, or when its own
     /// window is closed.
     fn home(self) -> Self::Role;
+    /// A strip: a body this many points tall, whatever the window's size
+    /// (a timeline, a status bar). A leaf of nothing but strips keeps that
+    /// height in a split above or below it, and its divider stays put.
+    fn strip(self) -> Option<f32> {
+        None
+    }
 }
 
 /// What a window is for: its title and size. One role is "a window a tab

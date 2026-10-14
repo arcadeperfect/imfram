@@ -57,6 +57,7 @@ fn tab_id(t: Tab) -> &'static str {
         Tab::Toasts => "tab-toasts",
         Tab::Theme => "tab-theme",
         Tab::Keymap => "tab-keymap",
+        Tab::Composer => "tab-composer",
     }
 }
 

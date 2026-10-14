@@ -44,7 +44,7 @@ impl App {
         let gpu = Gpu::standalone().expect("a GPU");
         let mut docks = Docks::new("playground", self.shot.is_some() || self.video.is_some());
         let mut main = Tree::new(vec![Tab::Widgets, Tab::Text]);
-        main.split(Side::Right, 0.55, vec![Tab::Colour, Tab::Files]);
+        main.split(Side::Right, 0.55, vec![Tab::Composer, Tab::Colour, Tab::Files]);
         docks.add(el, &gpu, Role::Main, main);
         let mut side = Tree::new(vec![Tab::Nodes, Tab::Canvas]);
         side.split(Side::Bottom, 0.7, vec![Tab::Keys]);

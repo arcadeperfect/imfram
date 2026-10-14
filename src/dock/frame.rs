@@ -51,6 +51,54 @@ pub trait Panels<T: Tab> {
     fn scroll_bars(&self, _tab: &T) -> [bool; 2] {
         [false, false]
     }
+    /// Whether each leaf spends a row on its tab bar. Say no and the bar
+    /// becomes a small patch ([`grip`]) the tab draws into its own first
+    /// row of controls; a tab that never calls [`grip`] gets the patch
+    /// floating at its top right. It drags, switches a stack and has the
+    /// tab's menu, as the bar did.
+    fn tab_bars(&self) -> bool {
+        true
+    }
+}
+
+/// What a compact leaf hands its tab to size the patch (`grip`): the
+/// stack's titles. Set only while a compact leaf draws its tab.
+#[derive(Clone)]
+struct GripSpec(Vec<&'static str>);
+
+fn grip_spec_id() -> Id {
+    Id::new("dock grip spec")
+}
+fn grip_rect_id() -> Id {
+    Id::new("dock grip rect")
+}
+
+const GRIP_W: f32 = 12.0;
+const CHIP_PAD: f32 = 10.0;
+
+fn chip_font() -> FontId {
+    FontId::proportional(11.0)
+}
+
+/// The patch that stands for a leaf's tab bar when the app turns the bars
+/// off (`Panels::tab_bars`): call it first in a tab's top row of
+/// controls. It reserves room; the dock draws it and takes its drags and
+/// clicks. Outside a compact dock it does nothing, so a tab can call it
+/// whatever the window.
+pub fn grip(ui: &mut Ui) {
+    let Some(GripSpec(titles)) = ui.ctx().data(|d| d.get_temp::<GripSpec>(grip_spec_id())) else { return };
+    let h = ui.spacing().interact_size.y;
+    let w = grip_width(ui, &titles);
+    let (r, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
+    ui.ctx().data_mut(|d| d.insert_temp(grip_rect_id(), r));
+}
+
+fn grip_width(ui: &Ui, titles: &[&'static str]) -> f32 {
+    if titles.len() < 2 {
+        return GRIP_W;
+    }
+    let chips: f32 = titles.iter().map(|t| ui.painter().layout_no_wrap(t.to_string(), chip_font(), Color32::WHITE).size().x + CHIP_PAD + 2.0).sum();
+    GRIP_W + chips
 }
 
 /// The leaves' rects as drawn: on their way to where the tree puts them;
@@ -149,7 +197,9 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
             (None, Some((t, p))) => (Some(t), Some(p)),
             _ => (None, None),
         };
-        let real = self.tree.layout_fixed(area, GAP, &strip_height::<T>);
+        let bar_h = if self.panels.tab_bars() { BAR_H } else { 0.0 };
+        let strip_h = |tabs: &[T]| strip_height(tabs, bar_h);
+        let real = self.tree.layout_fixed(area, GAP, &strip_h);
         let inside = at.is_some_and(|p| area.contains(p));
         let drop = match (drag, at) {
             (Some(tab), Some(p)) if inside => drop_at(&real, area, p, self.tree.find(tab)),
@@ -185,8 +235,8 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         }
         let solo = self.anim.solo.filter(|_| drag.is_none());
         let mut target = match &proposal {
-            Some(p) => p.layout_fixed(area, GAP, &strip_height::<T>),
-            None => self.tree.layout_fixed(area, GAP, &strip_height::<T>),
+            Some(p) => p.layout_fixed(area, GAP, &strip_h),
+            None => self.tree.layout_fixed(area, GAP, &strip_h),
         };
         if let Some(l) = solo {
             target.seps.clear();
@@ -299,91 +349,71 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         ui.painter().rect_filled(band, 0.0, c);
     }
 
-    /// One leaf: its tab bar and the active tab's body, in `rect`.
+    /// One leaf: its tab bar (or, compact, its patch) and the active
+    /// tab's body, in `rect`.
     fn leaf(&mut self, ui: &mut Ui, id: LeafId, rect: Rect, drag: Option<T>, ghost_tab: Option<T>) {
         let Some((_, tabs, active)) = self.tree.leaves().into_iter().find(|(l, ..)| *l == id) else { return };
         let tabs: Vec<T> = tabs.to_vec();
-        let (bar, body) = (Rect::from_min_size(rect.min, vec2(rect.width(), BAR_H)), Rect::from_min_max(pos2(rect.min.x, rect.min.y + BAR_H), rect.max));
+        let bars = self.panels.tab_bars();
+        let bar_h = if bars { BAR_H } else { 0.0 };
+        let (bar, body) = (Rect::from_min_size(rect.min, vec2(rect.width(), bar_h)), Rect::from_min_max(pos2(rect.min.x, rect.min.y + bar_h), rect.max));
         let vis = ui.visuals().clone();
         let p = ui.painter_at(rect);
         let clear = tabs.get(active).is_some_and(|t| self.panels.see_through(t));
         if !clear {
             p.rect_filled(rect, 4.0, vis.window_fill);
         }
-        p.rect_filled(bar, egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 }, vis.faint_bg_color);
+        if bars {
+            p.rect_filled(bar, egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 }, vis.faint_bg_color);
+        }
         p.rect_stroke(rect, 4.0, vis.window_stroke, egui::StrokeKind::Inside);
 
-        // The tabs.
-        let font = FontId::proportional(13.0);
-        let mut x = bar.min.x + 4.0;
         let mut set_active = None;
-        let all: Vec<(T, bool)> = tabs.iter().map(|t| (*t, false)).chain(ghost_tab.map(|t| (t, true))).collect();
-        for (i, (tab, ghost)) in all.iter().enumerate() {
-            let galley = p.layout_no_wrap(tab.title().to_string(), font.clone(), vis.text_color());
-            let w = galley.size().x + 26.0;
-            let r = Rect::from_min_size(pos2(x, bar.min.y + 2.0), vec2(w, BAR_H - 4.0));
-            x += w + 2.0;
-            if x > bar.max.x + w {
-                break;
-            }
-            let is_active = i == active && !ghost;
-            let in_hand = drag == Some(*tab) && !ghost;
-            if *ghost {
-                p.rect_stroke(r, 3.0, Stroke::new(1.0, vis.selection.stroke.color), egui::StrokeKind::Inside);
-                p.galley(r.min + vec2(6.0, 3.0), galley, vis.selection.stroke.color);
-                continue;
-            }
-            let resp = ui.interact(r, Id::new(("dock tab", self.here, *tab)), Sense::click_and_drag());
-            ui.ctx().data_mut(|d| d.insert_temp(super::viewer::tab_rect_id(*tab), r));
-            let fill = if is_active { vis.widgets.active.bg_fill } else if resp.hovered() { vis.widgets.hovered.bg_fill } else { Color32::TRANSPARENT };
-            p.rect_filled(r, 3.0, fill);
-            let tc = if in_hand { vis.weak_text_color() } else if is_active { vis.strong_text_color() } else { vis.text_color() };
-            p.galley(r.min + vec2(6.0, 3.0), galley, tc);
-            // The close cross.
-            let cx = Rect::from_center_size(pos2(r.max.x - 10.0, r.center().y), vec2(12.0, 12.0));
-            let close = ui.interact(cx, Id::new(("dock close", self.here, *tab)), Sense::click());
-            let xc = if close.hovered() { vis.strong_text_color() } else { vis.weak_text_color() };
-            p.line_segment([cx.min + vec2(3.0, 3.0), cx.max - vec2(3.0, 3.0)], Stroke::new(1.2, xc));
-            p.line_segment([pos2(cx.max.x - 3.0, cx.min.y + 3.0), pos2(cx.min.x + 3.0, cx.max.y - 3.0)], Stroke::new(1.2, xc));
-            if close.clicked() {
-                self.asks.push(Ask::Close(*tab));
-            }
-            if resp.clicked() {
-                set_active = Some(*tab);
-            }
-            if resp.drag_started() {
-                self.anim.drag = Some(*tab);
-            }
-            let key = match tab.key() {
-                "" => String::new(),
-                k => format!(" ({k} shows its window)"),
-            };
-            resp.clone().on_hover_text(format!("{}\n\ndrag it to move it: within the window, to another window, or anywhere else for a window of its own; right-click it for more{key}", tab.help()));
-            let others = self.others.clone();
-            let asks = &mut *self.asks;
-            resp.context_menu(|ui| {
-                if ui.button("detach to its own window").clicked() {
-                    asks.push(Ask::Detach(*tab));
-                    ui.close();
+        if bars {
+            // The tabs.
+            let font = FontId::proportional(13.0);
+            let mut x = bar.min.x + 4.0;
+            let all: Vec<(T, bool)> = tabs.iter().map(|t| (*t, false)).chain(ghost_tab.map(|t| (t, true))).collect();
+            for (i, (tab, ghost)) in all.iter().enumerate() {
+                let galley = p.layout_no_wrap(tab.title().to_string(), font.clone(), vis.text_color());
+                let w = galley.size().x + 26.0;
+                let r = Rect::from_min_size(pos2(x, bar.min.y + 2.0), vec2(w, BAR_H - 4.0));
+                x += w + 2.0;
+                if x > bar.max.x + w {
+                    break;
                 }
-                if !others.is_empty() {
-                    ui.menu_button("move to", |ui| {
-                        for (i, name) in &others {
-                            if ui.button(name).clicked() {
-                                asks.push(Ask::Move(*tab, *i, None));
-                                ui.close();
-                            }
-                        }
-                    });
+                let is_active = i == active && !ghost;
+                let in_hand = drag == Some(*tab) && !ghost;
+                if *ghost {
+                    p.rect_stroke(r, 3.0, Stroke::new(1.0, vis.selection.stroke.color), egui::StrokeKind::Inside);
+                    p.galley(r.min + vec2(6.0, 3.0), galley, vis.selection.stroke.color);
+                    continue;
                 }
-                if ui.button("close").clicked() {
-                    asks.push(Ask::Close(*tab));
-                    ui.close();
+                let resp = ui.interact(r, Id::new(("dock tab", self.here, *tab)), Sense::click_and_drag());
+                ui.ctx().data_mut(|d| d.insert_temp(super::viewer::tab_rect_id(*tab), r));
+                let fill = if is_active { vis.widgets.active.bg_fill } else if resp.hovered() { vis.widgets.hovered.bg_fill } else { Color32::TRANSPARENT };
+                p.rect_filled(r, 3.0, fill);
+                let tc = if in_hand { vis.weak_text_color() } else if is_active { vis.strong_text_color() } else { vis.text_color() };
+                p.galley(r.min + vec2(6.0, 3.0), galley, tc);
+                // The close cross.
+                let cx = Rect::from_center_size(pos2(r.max.x - 10.0, r.center().y), vec2(12.0, 12.0));
+                let close = ui.interact(cx, Id::new(("dock close", self.here, *tab)), Sense::click());
+                let xc = if close.hovered() { vis.strong_text_color() } else { vis.weak_text_color() };
+                p.line_segment([cx.min + vec2(3.0, 3.0), cx.max - vec2(3.0, 3.0)], Stroke::new(1.2, xc));
+                p.line_segment([pos2(cx.max.x - 3.0, cx.min.y + 3.0), pos2(cx.min.x + 3.0, cx.max.y - 3.0)], Stroke::new(1.2, xc));
+                if close.clicked() {
+                    self.asks.push(Ask::Close(*tab));
                 }
-            });
-        }
-        if let Some(t) = set_active {
-            self.tree.set_active(t);
+                if self.tab_handle(resp, *tab) {
+                    set_active = Some(*tab);
+                }
+            }
+        } else if let Some(t) = ghost_tab {
+            // A centre drop, with no bar to show a ghost tab on: the leaf lights.
+            let c = vis.selection.stroke.color;
+            p.rect_filled(rect, 4.0, c.gamma_multiply(0.10));
+            p.rect_stroke(rect, 4.0, Stroke::new(1.5, c), egui::StrokeKind::Inside);
+            p.text(rect.center(), Align2::CENTER_CENTER, t.title(), FontId::proportional(13.0), c);
         }
 
         // The body.
@@ -391,25 +421,141 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         let inner = body.shrink2(vec2(4.0, 2.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).id_salt(("dock body", id)));
         child.set_clip_rect(inner);
-        let bars = self.panels.scroll_bars(&tab);
-        if bars[0] || bars[1] {
-            egui::ScrollArea::new(bars).id_salt(("dock scroll", id)).auto_shrink([false, false]).show(&mut child, |ui| {
+        if !bars {
+            let titles: Vec<&'static str> = tabs.iter().map(|t| t.title()).collect();
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(grip_spec_id(), GripSpec(titles));
+                d.remove::<Rect>(grip_rect_id());
+            });
+        }
+        let scroll = self.panels.scroll_bars(&tab);
+        if scroll[0] || scroll[1] {
+            egui::ScrollArea::new(scroll).id_salt(("dock scroll", id)).auto_shrink([false, false]).show(&mut child, |ui| {
                 self.panels.tab(ui, tab);
             });
         } else {
             self.panels.tab(&mut child, tab);
         }
+        if !bars {
+            let placed = ui.ctx().data_mut(|d| {
+                d.remove::<GripSpec>(grip_spec_id());
+                let r = d.get_temp::<Rect>(grip_rect_id());
+                d.remove::<Rect>(grip_rect_id());
+                r
+            });
+            // The tab drew no row for it: the patch floats at its top right.
+            let r = placed.unwrap_or_else(|| {
+                let w = grip_width(ui, &tabs.iter().map(|t| t.title()).collect::<Vec<_>>());
+                Rect::from_min_size(pos2(inner.max.x - w - 2.0, inner.min.y + 2.0), vec2(w, ui.spacing().interact_size.y))
+            });
+            if let Some(t) = self.patch(ui, r.intersect(inner), &tabs, active, drag, placed.is_none()) {
+                set_active = Some(t);
+            }
+        }
+        if let Some(t) = set_active {
+            self.tree.set_active(t);
+        }
+    }
+
+    /// A compact leaf's patch at `r`: a grip (drags the tab on show) and,
+    /// for a stack, a chip per tab. Returns a chip clicked.
+    fn patch(&mut self, ui: &mut Ui, r: Rect, tabs: &[T], active: usize, drag: Option<T>, floating: bool) -> Option<T> {
+        if r.width() < 2.0 || r.height() < 2.0 {
+            return None;
+        }
+        let vis = ui.visuals().clone();
+        let p = ui.painter_at(r.expand(1.0));
+        if floating {
+            p.rect_filled(r, 3.0, vis.faint_bg_color);
+        }
+        let mut clicked = None;
+        let g = Rect::from_min_size(r.min, vec2(GRIP_W, r.height()));
+        if let Some(&shown) = tabs.get(active) {
+            let resp = ui.interact(g, Id::new(("dock tab", self.here, shown)), Sense::click_and_drag());
+            if tabs.len() == 1 {
+                ui.ctx().data_mut(|d| d.insert_temp(super::viewer::tab_rect_id(shown), g));
+            }
+            if resp.hovered() || resp.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                p.rect_filled(g, 3.0, vis.widgets.hovered.bg_fill);
+            }
+            // Six dots: a thing to take hold of.
+            let c = if drag == Some(shown) { vis.strong_text_color() } else if resp.hovered() { vis.text_color() } else { vis.weak_text_color() };
+            for row in -1..=1 {
+                for col in [-1.0f32, 1.0] {
+                    p.circle_filled(g.center() + vec2(col * 2.2, row as f32 * 4.0), 1.1, c);
+                }
+            }
+            self.tab_handle(resp, shown);
+        }
+        if tabs.len() > 1 {
+            let mut x = g.max.x;
+            for (i, &tab) in tabs.iter().enumerate() {
+                let galley = p.layout_no_wrap(tab.title().to_string(), chip_font(), vis.text_color());
+                let w = galley.size().x + CHIP_PAD;
+                let cr = Rect::from_min_size(pos2(x, r.min.y + 1.0), vec2(w, r.height() - 2.0));
+                x += w + 2.0;
+                let resp = ui.interact(cr, Id::new(("dock chip", self.here, tab)), Sense::click_and_drag());
+                ui.ctx().data_mut(|d| d.insert_temp(super::viewer::tab_rect_id(tab), cr));
+                let on = i == active;
+                let fill = if on { vis.widgets.active.bg_fill } else if resp.hovered() { vis.widgets.hovered.bg_fill } else { Color32::TRANSPARENT };
+                p.rect_filled(cr, 3.0, fill);
+                let tc = if drag == Some(tab) { vis.weak_text_color() } else if on { vis.strong_text_color() } else { vis.weak_text_color() };
+                p.galley(pos2(cr.min.x + CHIP_PAD * 0.5, cr.center().y - galley.size().y * 0.5), galley, tc);
+                if self.tab_handle(resp, tab) {
+                    clicked = Some(tab);
+                }
+            }
+        }
+        clicked
+    }
+
+    /// A tab's handle (its button on the bar, or its patch): drag moves
+    /// it, right-click is its menu, hover says what it is. True on a click.
+    fn tab_handle(&mut self, resp: egui::Response, tab: T) -> bool {
+        if resp.drag_started() {
+            self.anim.drag = Some(tab);
+        }
+        let key = match tab.key() {
+            "" => String::new(),
+            k => format!(" ({k} shows its window)"),
+        };
+        let resp = resp.on_hover_text(format!("{}: {}\n\ndrag it to move it: within the window, to another window, or anywhere else for a window of its own; right-click it for more{key}", tab.title(), tab.help()));
+        let clicked = resp.clicked();
+        let others = self.others.clone();
+        let asks = &mut *self.asks;
+        resp.context_menu(|ui| {
+            if ui.button("detach to its own window").clicked() {
+                asks.push(Ask::Detach(tab));
+                ui.close();
+            }
+            if !others.is_empty() {
+                ui.menu_button("move to", |ui| {
+                    for (i, name) in &others {
+                        if ui.button(name).clicked() {
+                            asks.push(Ask::Move(tab, *i, None));
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            if ui.button("close").clicked() {
+                asks.push(Ask::Close(tab));
+                ui.close();
+            }
+        });
+        clicked
     }
 }
 
 /// A leaf of nothing but strips (`Tab::strip`): its whole height, the
 /// tab bar and the body's margins included.
-fn strip_height<T: Tab>(tabs: &[T]) -> Option<f32> {
+fn strip_height<T: Tab>(tabs: &[T], bar_h: f32) -> Option<f32> {
     let mut h: Option<f32> = None;
     for t in tabs {
         h = Some(h.unwrap_or(0.0).max(t.strip()?));
     }
-    h.map(|h| h + BAR_H + 4.0)
+    h.map(|h| h + bar_h + 4.0)
 }
 
 /// The ghost: where the dragged tab's new leaf would be.

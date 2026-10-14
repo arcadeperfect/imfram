@@ -41,7 +41,7 @@ use crate::shell::{Gpu, UiWindow};
 
 pub use drag::Drag;
 use serde::{Deserialize, Serialize};
-pub use frame::{Anim, DockApp, Panels, BAR_H};
+pub use frame::{grip, Anim, DockApp, Panels, BAR_H};
 pub use HostWin as Win;
 pub use tree::{Drop, LeafId, Side, Tree, Zone};
 pub use viewer::tab_rect;

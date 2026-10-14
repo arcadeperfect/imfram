@@ -38,6 +38,7 @@ cargo run -p playground -- --shot DIR   # each window once to DIR/<role>.png
 | `history`     | graav  | snapshot undo that settles an edit burst into one step          |
 | `nodeview`    | graav  | a node canvas for any graph (`Graph` trait): wires, G-carry, ctrl-cut, magnet, splice, corner dots, E-stretch, Tab search, T tidy with glide |
 | `props`       | new    | the properties sheet: aligned rows, reset dots, key dots        |
+| `composer`    | new    | a panel the user fills at run time: Alt-drag (or pick and click) any slider, switch or props row into it; each row is the real control, re-run from the app's own panel code, saved by key |
 | `outliner`    | new    | a tree view: select, rename, drag to reorder or reparent        |
 | `table`       | new    | sortable, resizable columns over virtual rows                   |
 | `palette`     | new    | a command palette: fuzzy search over actions, recent first      |

@@ -5,6 +5,8 @@
 use egui::collapsing_header::CollapsingState;
 use egui::Ui;
 
+use crate::composer;
+
 /// Room kept beside a slider's rail for its value box and the longest
 /// label ("smoothing over time").
 const BESIDE_SLIDER: f32 = 190.0;
@@ -22,13 +24,26 @@ pub enum Start {
     Folded,
 }
 
+/// Every group is a composer scope (`crate::composer::scope`): its name is
+/// on the key of each control in it. Drawn for a composer, it is unfolded
+/// and has no header.
 fn folding(ui: &mut Ui, name: &str, start: Start, header: impl FnOnce(&mut Ui), body: impl FnOnce(&mut Ui)) {
+    if composer::harvesting(ui) {
+        header(ui);
+        composer::scope(ui, name, |ui| {
+            fit_sliders(ui);
+            body(ui);
+        });
+        return;
+    }
     let id = ui.make_persistent_id(("group", name));
     // (`GRAAV_UNFOLD=1` starts every group unfolded, to capture what is in them.)
     let open = start == Start::Open || std::env::var_os("GRAAV_UNFOLD").is_some();
     CollapsingState::load_with_default_open(ui.ctx(), id, open).show_header(ui, header).body(|ui| {
-        fit_sliders(ui);
-        body(ui);
+        composer::scope(ui, name, |ui| {
+            fit_sliders(ui);
+            body(ui);
+        })
     });
 }
 
@@ -47,10 +62,13 @@ pub fn group(ui: &mut Ui, name: &str, hint: &str, start: Start, body: impl FnOnc
 pub fn switched(ui: &mut Ui, on: &mut bool, name: &str, hint: &str, start: Start, body: impl FnOnce(&mut Ui)) {
     let mut now = *on;
     let header = |ui: &mut Ui| {
-        let switch = ui.checkbox(&mut now, egui::RichText::new(name).strong());
-        if !hint.is_empty() {
-            switch.on_hover_text(hint);
-        }
+        // (Its switch can go in a composer, under the group's own path.)
+        composer::item(ui, name, |ui| {
+            let switch = ui.checkbox(&mut now, egui::RichText::new(name).strong());
+            if !hint.is_empty() {
+                switch.on_hover_text(hint);
+            }
+        });
     };
     let was = *on;
     folding(ui, name, start, header, |ui| ui.add_enabled_ui(was, body).inner);

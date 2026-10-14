@@ -1,0 +1,30 @@
+[workspace]
+members = ["playground"]
+
+[package]
+name = "imfram"
+version = "0.1.0"
+edition = "2021"
+description = "The egui UI layer shared by wobble and graav: window shell, docking, tilt menus, widgets."
+publish = false
+
+[features]
+default = []
+
+[dependencies]
+egui = { version = "0.36", features = ["serde"] }
+egui-wgpu = "0.36"
+wgpu = "30"
+log = "0.4"
+web-time = "1"
+png = "0.18"
+half = { version = "2.7", features = ["bytemuck"] }
+bytemuck = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+egui-winit = "0.36"
+winit = "0.30"
+pollster = "1"
+rfd = "0.17"
+
+[dev-dependencies]

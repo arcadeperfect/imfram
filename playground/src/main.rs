@@ -46,7 +46,7 @@ impl App {
         let mut main = Tree::new(vec![Tab::Widgets, Tab::Text]);
         main.split(Side::Right, 0.55, vec![Tab::Colour, Tab::Files]);
         docks.add(el, &gpu, Role::Main, main);
-        let mut side = Tree::new(vec![Tab::Canvas]);
+        let mut side = Tree::new(vec![Tab::Nodes, Tab::Canvas]);
         side.split(Side::Bottom, 0.7, vec![Tab::Keys]);
         docks.add(el, &gpu, Role::Side, side);
         docks.add_hidden(el, &gpu, Role::Spare, Tree::new(vec![Tab::Nothing]));

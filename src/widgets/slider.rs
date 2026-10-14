@@ -58,7 +58,7 @@ pub fn slider(ui: &mut Ui, value: &mut f32, range: (f32, f32), text: &str, log: 
     row.inner.changed
 }
 
-pub(super) fn row(ui: &mut Ui, value: &mut f32, (lo, hi): (f32, f32), text: &str, log: bool) -> Row {
+pub fn row(ui: &mut Ui, value: &mut f32, (lo, hi): (f32, f32), text: &str, log: bool) -> Row {
     // A log rail needs a strictly positive span.
     let log = log && lo > 0.0 && hi > lo;
     let before = *value;

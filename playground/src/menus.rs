@@ -44,6 +44,7 @@ fn tab_id(t: Tab) -> &'static str {
         Tab::Text => "tab-text",
         Tab::Files => "tab-files",
         Tab::Canvas => "tab-canvas",
+        Tab::Nodes => "tab-nodes",
         Tab::Keys => "tab-keys",
         Tab::Nothing => "tab-nothing",
         Tab::Props => "tab-props",

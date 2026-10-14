@@ -36,12 +36,13 @@ use winit::window::WindowId;
 use crate::shell::{Gpu, UiWindow};
 
 pub use drag::Drag;
+use serde::{Deserialize, Serialize};
 pub use frame::{Anim, DockApp, Panels, BAR_H};
 pub use tree::{Drop, LeafId, Side, Tree, Zone};
 pub use viewer::tab_rect;
 
 /// A panel a window can hold.
-pub trait Tab: Copy + Eq + Hash + Debug + 'static {
+pub trait Tab: Copy + Eq + Hash + Debug + Serialize + serde::de::DeserializeOwned + 'static {
     type Role: Role;
     /// Every tab, for the "panels" menu.
     fn all() -> &'static [Self];
@@ -61,13 +62,30 @@ pub trait Tab: Copy + Eq + Hash + Debug + 'static {
 
 /// What a window is for: its title and size. One role is "a window a tab
 /// was detached into"; the rest are the app's home windows.
-pub trait Role: Copy + Eq + Debug + 'static {
+pub trait Role: Copy + Eq + Debug + Serialize + serde::de::DeserializeOwned + 'static {
     fn title(self) -> &'static str;
     fn size(self) -> (u32, u32);
     fn detached() -> Self;
     fn is_detached(self) -> bool {
         self == Self::detached()
     }
+}
+
+/// A layout as saved: every window, its tree and where it stood.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Layout<T, R> {
+    pub windows: Vec<Saved<T, R>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Saved<T, R> {
+    pub role: R,
+    pub tree: Tree<T>,
+    /// Outer position, physical pixels.
+    pub at: Option<[f64; 2]>,
+    /// Inner size, logical points.
+    pub size: Option<[u32; 2]>,
+    pub visible: bool,
 }
 
 /// One tool window and the dock of tabs in it.
@@ -311,6 +329,40 @@ impl<T: Tab> Docks<T> {
             _ => self.hosts[i].win.on_event(gpu, event),
         }
         false
+    }
+
+    /// Every window as it stands: for prefs. Detached windows included.
+    pub fn save(&self) -> Layout<T, T::Role> {
+        let windows = self
+            .hosts
+            .iter()
+            .map(|h| {
+                let w = &h.win.window;
+                let at = w.outer_position().ok().map(|p| [p.x as f64, p.y as f64]);
+                let size = w.inner_size();
+                let k = w.scale_factor();
+                Saved { role: h.role, tree: h.tree.clone(), at, size: Some([(size.width as f64 / k) as u32, (size.height as f64 / k) as u32]), visible: h.win.is_visible() }
+            })
+            .collect();
+        Layout { windows }
+    }
+
+    /// Windows as saved: one per entry, placed and sized as they were. A
+    /// tab a saved layout does not know goes to its home window after.
+    pub fn restore(&mut self, el: &ActiveEventLoop, gpu: &Gpu, layout: Layout<T, T::Role>) {
+        for s in layout.windows {
+            let i = self.add(el, gpu, s.role, s.tree);
+            let w = &self.hosts[i].win.window;
+            if let Some(size) = s.size {
+                let _ = w.request_inner_size(winit::dpi::LogicalSize::new(size[0].max(100), size[1].max(80)));
+            }
+            if let Some(at) = s.at {
+                w.set_outer_position(winit::dpi::PhysicalPosition::new(at[0], at[1]));
+            }
+            if !s.visible {
+                w.set_visible(false);
+            }
+        }
     }
 
     /// The tab a drag would drop into window `i` while it is over it,

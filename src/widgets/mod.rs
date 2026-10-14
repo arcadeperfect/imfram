@@ -15,7 +15,7 @@
 pub mod group;
 pub mod keystrip;
 pub mod offline;
-mod rate;
+pub mod rate;
 pub mod slider;
 pub mod tip;
 

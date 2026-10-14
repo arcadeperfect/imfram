@@ -5,11 +5,12 @@
 //! behind (`proposed`), which the frame animates toward before the drop.
 
 use egui::{pos2, Rect};
+use serde::{Deserialize, Serialize};
 
 /// A leaf's identity, kept across edits so its rect can animate.
 pub type LeafId = u32;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Dir {
     /// `a` left of `b`.
     Row,
@@ -54,7 +55,7 @@ pub enum Drop {
     Root(Side),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Node<T> {
     Leaf { id: LeafId, tabs: Vec<T>, active: usize },
     Split { dir: Dir, frac: f32, a: Box<Node<T>>, b: Box<Node<T>> },
@@ -63,7 +64,7 @@ pub enum Node<T> {
 /// A split's place: the a/b turns from the root.
 pub type Path = Vec<bool>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Tree<T> {
     root: Option<Node<T>>,
     next: LeafId,
@@ -458,5 +459,20 @@ mod tests {
         assert_eq!(t.active(id), Some("z"));
         assert_eq!(top.min.y, 0.0);
         assert!(top.height() < 40.0);
+    }
+}
+
+#[cfg(test)]
+mod serde_tests {
+    use super::*;
+
+    #[test]
+    fn a_tree_survives_a_round_trip_through_json() {
+        let mut t = Tree::new(vec!["a", "b"]);
+        t.split(Side::Right, 0.6, vec!["c"]);
+        let s = serde_json::to_string(&t).unwrap();
+        let back: Tree<&str> = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.tabs(), t.tabs());
+        assert_eq!(back.next_id(), t.next_id());
     }
 }

@@ -29,6 +29,9 @@ pub trait Panels<T: Tab> {
     fn begin(&mut self, _ui: &mut Ui) {}
     /// Items in the top bar, left of the "panels" menu.
     fn bar(&mut self, _ui: &mut Ui) {}
+    /// Along the window's bottom, before the dock takes the rest (a
+    /// status bar: `egui::Panel::bottom`).
+    fn foot(&mut self, _ui: &mut Ui) {}
     /// One tab's body.
     fn tab(&mut self, ui: &mut Ui, tab: T);
     /// After the dock (an editor's frame ends; floating windows).
@@ -96,6 +99,7 @@ impl<T: Tab, P: Panels<T>> UiApp for DockApp<'_, T, P> {
                 );
             });
         });
+        self.panels.foot(ui);
         let area = ui.available_rect_before_wrap();
         self.dock(ui, area);
         self.panels.end(ui);

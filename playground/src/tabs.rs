@@ -8,7 +8,8 @@ use imfram::filebrowser::{Action, Browser};
 use imfram::fonts::Fonts;
 use imfram::history::History;
 use imfram::hudkeys::{self, HudKey, TopStrip};
-use imfram::nav::{self, DragNav};
+use imfram::nav::{self, DragNav, GestureFilter};
+use imfram::nodeview::{self, NodeView};
 use imfram::rgbslider::{self, RgbSpec};
 use imfram::textedit::{self, Code};
 use imfram::tiltmenu::TiltBar;
@@ -16,13 +17,14 @@ use imfram::widgets::group::{group, switched, Start};
 use imfram::widgets::keystrip::{self, Cap, Reveal};
 use imfram::widgets::{self, tipped};
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Widgets,
     Colour,
     Text,
     Files,
     Canvas,
+    Nodes,
     Keys,
     Nothing,
     Props,
@@ -37,7 +39,7 @@ pub enum Tab {
     Keymap,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Role {
     Main,
     Side,
@@ -55,6 +57,7 @@ impl dock::Tab for Tab {
             Tab::Text,
             Tab::Files,
             Tab::Canvas,
+            Tab::Nodes,
             Tab::Keys,
             Tab::Nothing,
             Tab::Props,
@@ -76,6 +79,7 @@ impl dock::Tab for Tab {
             Tab::Text => "Text",
             Tab::Files => "Files",
             Tab::Canvas => "Canvas",
+            Tab::Nodes => "Nodes",
             Tab::Keys => "Keys",
             Tab::Nothing => "Nothing",
             Tab::Props => "Props",
@@ -97,6 +101,7 @@ impl dock::Tab for Tab {
             Tab::Text => "a line, a paragraph, and code with a gutter; undo is snapshot history",
             Tab::Files => "the file browser",
             Tab::Canvas => "a pan / zoom canvas on Blender's hands: MMB pan, ctrl+MMB zoom, wheel zoom",
+            Tab::Nodes => "the node view over a toy graph: wire, cut, G, magnet, splice, dots, E, T, Tab",
             Tab::Keys => "hotkey caps: the top strip and the key strip",
             Tab::Nothing => "a tab with nothing in it, for moving about",
             Tab::Props => "the properties / inspector panel pattern",
@@ -114,7 +119,7 @@ impl dock::Tab for Tab {
     fn home(self) -> Role {
         match self {
             Tab::Widgets | Tab::Colour | Tab::Text | Tab::Files => Role::Main,
-            Tab::Canvas | Tab::Keys => Role::Side,
+            Tab::Canvas | Tab::Nodes | Tab::Keys => Role::Side,
             Tab::Nothing => Role::Spare,
             _ => Role::Views,
         }
@@ -187,6 +192,10 @@ pub struct Playground {
     pub nodes: Vec<egui::Vec2>,
     pub held: Option<usize>,
     pub views: crate::views::Views,
+    pub graph: nodeview::demo::Demo,
+    pub nodes_view: NodeView<u64>,
+    pub gestures: GestureFilter,
+    pub last_edit: nodeview::Edit,
 }
 
 impl Default for Playground {
@@ -225,6 +234,10 @@ impl Default for Playground {
             nodes: vec![egui::vec2(0.0, 0.0), egui::vec2(240.0, 80.0), egui::vec2(-160.0, 200.0), egui::vec2(80.0, -240.0)],
             held: None,
             views: Default::default(),
+            graph: nodeview::demo::Demo::sample(),
+            nodes_view: NodeView::default(),
+            gestures: GestureFilter::default(),
+            last_edit: Default::default(),
         }
     }
 }
@@ -236,6 +249,12 @@ impl Playground {
 }
 
 impl Panels<Tab> for Playground {
+    fn raw_input(&mut self, raw: &mut egui::RawInput, tabs: &[Tab]) {
+        if tabs.contains(&Tab::Nodes) {
+            self.gestures.process(raw, nodeview::claims);
+        }
+    }
+
     fn begin(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx();
         // Zoom and fonts land between drags: a slider that rescales as it
@@ -265,6 +284,7 @@ impl Panels<Tab> for Playground {
             Tab::Text => self.text(ui),
             Tab::Files => self.files_tab(ui),
             Tab::Canvas => self.canvas(ui),
+            Tab::Nodes => self.nodes(ui),
             Tab::Keys => self.keys(ui),
             Tab::Nothing => {
                 ui.centered_and_justified(|ui| ui.weak("nothing here"));
@@ -282,7 +302,8 @@ impl Panels<Tab> for Playground {
         }
     }
 
-    fn end(&mut self, ui: &mut Ui) {
+    fn foot(&mut self, ui: &mut Ui) {
+        // (The status bar takes its room before the dock; the toasts float.)
         crate::views::toast::overlay(ui, &mut self.views.toast);
     }
 
@@ -474,6 +495,24 @@ impl Playground {
 
     /// Zoom by `k` with the canvas point under `at` staying put. `rect`
     /// is where the canvas was drawn (its origin is `center + pan`).
+    fn nodes(&mut self, ui: &mut Ui) {
+        let typing = ui.ctx().text_edit_focused();
+        let (tab, grab, stretch, shift, tidy) = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::Tab) && !typing,
+                i.key_pressed(egui::Key::G) && !typing,
+                i.key_down(egui::Key::E) && !typing,
+                i.modifiers.shift_only(),
+                i.key_pressed(egui::Key::T) && !typing,
+            )
+        });
+        let input = nodeview::Input { presses: &self.gestures.presses, releases: &self.gestures.releases, tab, grab, stretch, shift, tidy };
+        let edit = self.nodes_view.show(ui, &mut self.graph, &input);
+        if edit.changed || edit.moved {
+            self.last_edit = edit;
+        }
+    }
+
     fn zoom_about(&mut self, rect: Rect, at: egui::Pos2, k: f32) {
         let k = k.clamp(0.2 / self.scale, 5.0 / self.scale);
         let origin = rect.center() + self.pan;

@@ -36,6 +36,17 @@ cargo run -p playground -- --shot DIR   # each window once to DIR/<role>.png
 | `fonts`       | new    | body / code size and a user's font file, applied to a context   |
 | `filebrowser` | new    | places, crumbs, filter, folders first, pick; lists off-thread   |
 | `history`     | graav  | snapshot undo that settles an edit burst into one step          |
+| `nodeview`    | graav  | a node canvas for any graph (`Graph` trait): wires, G-carry, ctrl-cut, magnet, splice, corner dots, E-stretch, Tab search, T tidy with glide |
+| `props`       | new    | the properties sheet: aligned rows, reset dots, key dots        |
+| `outliner`    | new    | a tree view: select, rename, drag to reorder or reparent        |
+| `table`       | new    | sortable, resizable columns over virtual rows                   |
+| `palette`     | new    | a command palette: fuzzy search over actions, recent first      |
+| `dialog`      | new    | modal confirm, prompt, progress; a settings-window frame        |
+| `toast` / `statusbar` | new | transient notices; a bottom strip with a flash and progress |
+| `timeline`    | new    | range, playhead, keys, scrub, transport                         |
+| `imageview`   | new    | an image at zoom and pan with a pixel readout                   |
+| `theme`       | wobble | the slot engine: `slots!` macro, links, hex overrides, the colours window |
+| `keymap`      | wobble | bindings, overrides, conflicts, the rebind keyboard window      |
 | `filedialog`  | wobble | rfd on native, a stand-in on the web                            |
 | `bg`          | wobble | fire-and-forget work: a thread, or inline on the web            |
 | `snapshot`    | wobble | test: CPU-rasterized egui output for geometry asserts           |

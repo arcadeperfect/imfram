@@ -82,8 +82,10 @@ pub struct WheelNav {
 
 /// One wheel notch ("line") in pixels. ~16% zoom per notch lands where
 /// Blender's per-notch step feels.
-const LINE_PX: f32 = 50.0;
+pub const LINE_PX: f32 = 50.0;
 const WHEEL_ZOOM: f32 = 0.003;
+/// Zoom per wheel notch, as the exponent (`exp(NOTCH_LN)` a notch).
+pub const NOTCH_LN: f32 = LINE_PX * WHEEL_ZOOM;
 
 /// Classify raw wheel/pinch events. Pure for the same reason as `drag_nav`.
 pub fn classify_wheel(events: &[egui::Event]) -> WheelNav {
@@ -129,6 +131,67 @@ pub fn classify_wheel(events: &[egui::Event]) -> WheelNav {
 pub fn wheel_nav(ui: &egui::Ui) -> WheelNav {
     ui.input(|i| classify_wheel(&i.events))
 }
+
+/// A pointer press or release that a canvas claims before egui's widgets
+/// see it (so a middle-drag over a slider pans instead of scrubbing it).
+#[derive(Clone, Copy, Debug)]
+pub struct Press {
+    pub button: PointerButton,
+    pub pos: egui::Pos2,
+    pub modifiers: Modifiers,
+}
+
+/// Pulls canvas gestures out of the raw input. `claims` decides, at press
+/// time, whether a chord belongs to the canvas; the matching release is
+/// taken too. (graav's.)
+#[derive(Default)]
+pub struct GestureFilter {
+    held: [bool; 5],
+    pub presses: Vec<Press>,
+    pub releases: Vec<PointerButton>,
+}
+
+impl GestureFilter {
+    pub fn process(&mut self, raw: &mut egui::RawInput, claims: impl Fn(PointerButton, Modifiers) -> bool) {
+        self.presses.clear();
+        self.releases.clear();
+        let slot = |b: PointerButton| b as usize;
+        raw.events.retain(|e| match e {
+            egui::Event::PointerButton { pos, button, pressed: true, modifiers } => {
+                if claims(*button, *modifiers) {
+                    self.held[slot(*button)] = true;
+                    self.presses.push(Press { button: *button, pos: *pos, modifiers: *modifiers });
+                    false
+                } else {
+                    true
+                }
+            }
+            egui::Event::PointerButton { button, pressed: false, .. } if self.held[slot(*button)] => {
+                self.held[slot(*button)] = false;
+                self.releases.push(*button);
+                false
+            }
+            _ => true,
+        });
+        // A release lost to another window must not leave a gesture stuck.
+        let lost = raw.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false)));
+        if lost {
+            for (i, held) in self.held.iter_mut().enumerate() {
+                if std::mem::take(held) {
+                    self.releases.push(BUTTONS[i]);
+                }
+            }
+        }
+    }
+}
+
+const BUTTONS: [PointerButton; 5] = [
+    PointerButton::Primary,
+    PointerButton::Secondary,
+    PointerButton::Middle,
+    PointerButton::Extra1,
+    PointerButton::Extra2,
+];
 
 #[cfg(test)]
 mod tests {

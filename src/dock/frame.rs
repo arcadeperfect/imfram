@@ -29,6 +29,11 @@ pub trait Panels<T: Tab> {
     fn begin(&mut self, _ui: &mut Ui) {}
     /// Items in the top bar, left of the "panels" menu.
     fn bar(&mut self, _ui: &mut Ui) {}
+    /// Whether the top bar (the app's items and the "panels" menu) is
+    /// drawn at all. An app with its own menubar says no.
+    fn bar_shown(&self) -> bool {
+        true
+    }
     /// Along the window's bottom, before the dock takes the rest (a
     /// status bar: `egui::Panel::bottom`).
     fn foot(&mut self, _ui: &mut Ui) {}
@@ -93,14 +98,16 @@ impl<T: Tab, P: Panels<T>> UiApp for DockApp<'_, T, P> {
 
     fn ui(&mut self, ui: &mut Ui) {
         self.panels.begin(ui);
-        egui::Panel::top(Id::new(("dock-bar", self.here))).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                self.panels.bar(ui);
-                ui.menu_button("panels", |ui| self.panels_menu(ui)).response.on_hover_text(
-                    "every panel: open or close it; drag a tab to move it, right-click it to detach it or move it to another window",
-                );
+        if self.panels.bar_shown() {
+            egui::Panel::top(Id::new(("dock-bar", self.here))).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    self.panels.bar(ui);
+                    ui.menu_button("panels", |ui| self.panels_menu(ui)).response.on_hover_text(
+                        "every panel: open or close it; drag a tab to move it, right-click it to detach it or move it to another window",
+                    );
+                });
             });
-        });
+        }
         self.panels.foot(ui);
         let area = ui.available_rect_before_wrap();
         self.dock(ui, area);

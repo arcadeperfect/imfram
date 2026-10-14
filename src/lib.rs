@@ -9,6 +9,7 @@
 //! | `hudkeys`     | wobble | hotkey caps fanned along a view's top                         |
 //! | `nav`         | both   | Blender-style pan / zoom classifiers for any 2D canvas        |
 //! | `widgets`     | graav  | sliders with drag rates, folding groups, row tooltips, key strips |
+//! | `canvas`      | new    | a canvas for vector, pictures, video and notes: Blender hands, G/R/S, a stack |
 //! | `nodeview`    | graav  | a node canvas for any graph: wires, magnet, splice, dots, stretch, search, tidy |
 //! | `numfield`    | wobble | a DragValue in a fixed box, decimals dropping to fit          |
 //! | `rgbslider`   | wobble | the RGB triple slider                                         |
@@ -39,6 +40,7 @@
 //! and key maps stay in the apps for now; see the README.
 
 pub mod bg;
+pub mod canvas;
 pub mod dialog;
 pub mod imageview;
 pub mod keymap;

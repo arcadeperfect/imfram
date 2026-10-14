@@ -36,6 +36,7 @@ cargo run -p playground -- --shot DIR   # each window once to DIR/<role>.png
 | `fonts`       | new    | body / code size and a user's font file, applied to a context   |
 | `filebrowser` | new    | places, crumbs, filter, folders first, pick; lists off-thread   |
 | `history`     | graav  | snapshot undo that settles an edit burst into one step          |
+| `canvas`      | new    | a canvas for anything placed in 2D: camera with Blender hands and a framing glide, a decade grid, a `Scene` trait an app's document implements, and `Board` with vector shapes (béziers, concave fills), pictures, video clips (`FrameSource`) and notes; select, box, drag, G/R/S with axis lock and snapping, corner and rotate handles, duplicate, restack, edit in place, file drops |
 | `nodeview`    | graav  | a node canvas for any graph (`Graph` trait): wires, G-carry, ctrl-cut, magnet, splice, corner dots, E-stretch, Tab search, T tidy with glide |
 | `props`       | new    | the properties sheet: aligned rows, reset dots, key dots        |
 | `outliner`    | new    | a tree view: select, rename, drag to reorder or reparent        |

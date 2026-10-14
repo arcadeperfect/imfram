@@ -1,20 +1,20 @@
 //! The playground's tabs and windows, and what each tab shows: a widget
 //! zoo with nothing behind it.
 
-use egui::{Rect, Ui};
+use egui::Ui;
 use imfram::colorpicker::{self, PickSpec};
 use imfram::dock::{self, Panels};
 use imfram::filebrowser::{Action, Browser};
 use imfram::fonts::Fonts;
 use imfram::history::History;
 use imfram::hudkeys::{self, HudKey, TopStrip};
-use imfram::nav::{self, DragNav, GestureFilter};
+use imfram::nav::GestureFilter;
 use imfram::nodeview::{self, NodeView};
 use imfram::rgbslider::{self, RgbSpec};
 use imfram::textedit::{self, Code};
 use imfram::tiltmenu::TiltBar;
 use imfram::widgets::group::{group, switched, Start};
-use imfram::widgets::keystrip::{self, Cap, Reveal};
+use imfram::widgets::keystrip::Reveal;
 use imfram::widgets::{self, tipped};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
@@ -100,7 +100,7 @@ impl dock::Tab for Tab {
             Tab::Colour => "the RGB triple slider and the colour picker",
             Tab::Text => "a line, a paragraph, and code with a gutter; undo is snapshot history",
             Tab::Files => "the file browser",
-            Tab::Canvas => "a pan / zoom canvas on Blender's hands: MMB pan, ctrl+MMB zoom, wheel zoom",
+            Tab::Canvas => "the canvas: vector shapes, a picture, a playing clip and notes on Blender's hands; G R S, box select, drop a PNG",
             Tab::Nodes => "the node view over a toy graph: wire, cut, G, magnet, splice, dots, E, T, Tab",
             Tab::Keys => "hotkey caps: the top strip and the key strip",
             Tab::Nothing => "a tab with nothing in it, for moving about",
@@ -185,12 +185,7 @@ pub struct Playground {
     pub files: Browser,
     pub picked: Option<String>,
     // canvas
-    pub pan: egui::Vec2,
-    pub scale: f32,
     pub reveal: Reveal,
-    /// Canvas nodes: where each is, in canvas units.
-    pub nodes: Vec<egui::Vec2>,
-    pub held: Option<usize>,
     pub views: crate::views::Views,
     pub graph: nodeview::demo::Demo,
     pub nodes_view: NodeView<u64>,
@@ -228,11 +223,7 @@ impl Default for Playground {
             code,
             files: Browser::new(std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(|| "/".into())),
             picked: None,
-            pan: egui::Vec2::ZERO,
-            scale: 1.0,
             reveal: Reveal::default(),
-            nodes: vec![egui::vec2(0.0, 0.0), egui::vec2(240.0, 80.0), egui::vec2(-160.0, 200.0), egui::vec2(80.0, -240.0)],
-            held: None,
             views: Default::default(),
             graph: nodeview::demo::Demo::sample(),
             nodes_view: NodeView::default(),
@@ -414,87 +405,9 @@ impl Playground {
     }
 
     fn canvas(&mut self, ui: &mut Ui) {
-        let (rect, resp) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
-        let p = ui.painter_at(rect);
-        p.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
-        let origin = rect.center() + self.pan;
-        let node_rect = |i: usize, nodes: &[egui::Vec2], scale: f32| Rect::from_center_size(origin + nodes[i] * scale, egui::vec2(120.0, 60.0) * scale);
-        // Hands: which button + chord is which, from `nav`. A plain LMB
-        // drag is the canvas' own: it moves a node.
-        let mods = ui.input(|i| i.modifiers);
-        let button = [egui::PointerButton::Middle, egui::PointerButton::Primary, egui::PointerButton::Secondary]
-            .into_iter()
-            .find(|b| resp.dragged_by(*b));
-        if let Some(b) = button {
-            match nav::drag_nav(b, mods) {
-                Some(DragNav::Pan) => self.pan += resp.drag_delta(),
-                Some(DragNav::Zoom) => {
-                    let k = nav::drag_zoom(resp.drag_delta());
-                    self.zoom_about(rect, rect.center(), k);
-                }
-                None if b == egui::PointerButton::Primary => {
-                    if self.held.is_none() && resp.drag_started() {
-                        let at = resp.interact_pointer_pos().unwrap_or(rect.center());
-                        self.held = (0..self.nodes.len()).rev().find(|&i| node_rect(i, &self.nodes, self.scale).contains(at));
-                    }
-                    if let Some(i) = self.held {
-                        self.nodes[i] += resp.drag_delta() / self.scale;
-                    }
-                }
-                None => {}
-            }
-        }
-        if resp.drag_stopped() {
-            self.held = None;
-        }
-        if resp.hovered() {
-            let w = nav::wheel_nav(ui);
-            self.pan += w.pan;
-            if w.zoom != 1.0 {
-                let at = ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.center());
-                self.zoom_about(rect, at, w.zoom);
-            }
-        }
-        // A grid and a few boxes, so the motion reads.
-        let origin = rect.center() + self.pan;
-        let step = 40.0 * self.scale;
-        let grid = ui.visuals().weak_text_color().gamma_multiply(0.35);
-        let mut x = origin.x % step;
-        while x < rect.width() {
-            p.vline(rect.min.x + x, rect.y_range(), (1.0, grid));
-            x += step;
-        }
-        let mut y = origin.y % step;
-        while y < rect.height() {
-            p.hline(rect.x_range(), rect.min.y + y, (1.0, grid));
-            y += step;
-        }
-        let hover = ui.input(|i| i.pointer.hover_pos());
-        for i in 0..self.nodes.len() {
-            let r = node_rect(i, &self.nodes, self.scale);
-            let lit = self.held == Some(i) || (self.held.is_none() && hover.is_some_and(|h| r.contains(h)));
-            let w = if lit { &ui.visuals().widgets.hovered } else { &ui.visuals().widgets.inactive };
-            p.rect_filled(r, 6.0 * self.scale, w.bg_fill);
-            p.rect_stroke(r, 6.0 * self.scale, w.fg_stroke, egui::StrokeKind::Inside);
-            p.text(r.center(), egui::Align2::CENTER_CENTER, format!("node {i}"), egui::FontId::proportional(14.0 * self.scale), ui.visuals().text_color());
-        }
-        if self.held.is_some() || hover.is_some_and(|h| (0..self.nodes.len()).any(|i| node_rect(i, &self.nodes, self.scale).contains(h))) {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-        }
-        if self.strip {
-            let caps = [
-                Cap { cap: "LMB", does: "move a node", held: self.held.is_some() },
-                Cap { cap: "MMB", does: "pan", held: false },
-                Cap { cap: "ctrl MMB", does: "zoom", held: mods.ctrl || mods.command },
-                Cap { cap: "alt LMB", does: "pan", held: mods.alt },
-                Cap { cap: "wheel", does: "zoom", held: false },
-            ];
-            keystrip::show(ui, rect, rect, &caps, &mut self.reveal, false);
-        }
+        crate::views::canvas::ui(ui, &mut self.views.canvas, self.strip, &mut self.reveal);
     }
 
-    /// Zoom by `k` with the canvas point under `at` staying put. `rect`
-    /// is where the canvas was drawn (its origin is `center + pan`).
     fn nodes(&mut self, ui: &mut Ui) {
         let typing = ui.ctx().text_edit_focused();
         let (tab, grab, stretch, shift, tidy) = ui.input(|i| {
@@ -511,14 +424,6 @@ impl Playground {
         if edit.changed || edit.moved {
             self.last_edit = edit;
         }
-    }
-
-    fn zoom_about(&mut self, rect: Rect, at: egui::Pos2, k: f32) {
-        let k = k.clamp(0.2 / self.scale, 5.0 / self.scale);
-        let origin = rect.center() + self.pan;
-        let under = at - origin;
-        self.scale *= k;
-        self.pan = (at - under * k) - rect.center();
     }
 
     fn keys(&mut self, ui: &mut Ui) {

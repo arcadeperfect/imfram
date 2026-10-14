@@ -2,6 +2,7 @@
 //! nothing behind it. Each file is one lane: fill it in, touch nothing
 //! else here.
 
+pub mod canvas;
 pub mod dialog;
 pub mod imageview;
 pub mod keymap;
@@ -15,6 +16,7 @@ pub mod toast;
 
 #[derive(Default)]
 pub struct Views {
+    pub canvas: canvas::State,
     pub toast: toast::State,
     pub outliner: outliner::State,
     pub table: table::State,

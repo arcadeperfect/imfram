@@ -249,7 +249,7 @@ impl Playground {
 }
 
 impl Panels<Tab> for Playground {
-    fn raw_input(&mut self, raw: &mut egui::RawInput, tabs: &[Tab]) {
+    fn raw_input(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput, tabs: &[Tab]) {
         if tabs.contains(&Tab::Nodes) {
             self.gestures.process(raw, nodeview::claims);
         }

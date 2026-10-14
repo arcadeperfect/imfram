@@ -3,7 +3,8 @@
 //! tool windows never hold up a game window's frame.
 
 use std::sync::Arc;
-use std::time::Instant;
+
+use web_time::Instant;
 
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;

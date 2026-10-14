@@ -33,11 +33,16 @@ use std::hash::Hash;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowId;
 
+use std::sync::Arc;
+
+use winit::window::Window;
+
 use crate::shell::{Gpu, UiWindow};
 
 pub use drag::Drag;
 use serde::{Deserialize, Serialize};
 pub use frame::{Anim, DockApp, Panels, BAR_H};
+pub use HostWin as Win;
 pub use tree::{Drop, LeafId, Side, Tree, Zone};
 pub use viewer::tab_rect;
 
@@ -88,10 +93,83 @@ pub struct Saved<T, R> {
     pub visible: bool,
 }
 
+/// A host's window: one of ours (`UiWindow`, drawn by `Docks::frame`), or
+/// the app's own (its main window, whose egui frame the app runs itself
+/// and draws the dock into with `Docks::draw_external`).
+pub enum HostWin {
+    Own(UiWindow),
+    External { window: Arc<Window>, ctx: egui::Context },
+}
+
+impl HostWin {
+    pub fn window(&self) -> &Window {
+        match self {
+            HostWin::Own(w) => &w.window,
+            HostWin::External { window, .. } => window,
+        }
+    }
+    pub fn ctx(&self) -> &egui::Context {
+        match self {
+            HostWin::Own(w) => w.ctx(),
+            HostWin::External { ctx, .. } => ctx,
+        }
+    }
+    pub fn id(&self) -> WindowId {
+        self.window().id()
+    }
+    pub fn is_external(&self) -> bool {
+        matches!(self, HostWin::External { .. })
+    }
+    pub fn is_visible(&self) -> bool {
+        self.window().is_visible().unwrap_or(true)
+    }
+    pub fn request_repaint(&mut self) {
+        match self {
+            HostWin::Own(w) => w.request_repaint(),
+            HostWin::External { window, ctx } => {
+                ctx.request_repaint();
+                window.request_redraw();
+            }
+        }
+    }
+    pub fn show(&mut self) {
+        match self {
+            HostWin::Own(w) => w.show(),
+            HostWin::External { window, .. } => {
+                window.set_visible(true);
+                window.set_minimized(false);
+                window.focus_window();
+            }
+        }
+    }
+    pub fn toggle_visible(&mut self) {
+        match self {
+            HostWin::Own(w) => w.toggle_visible(),
+            HostWin::External { window, .. } => {
+                let show = !window.is_visible().unwrap_or(true);
+                window.set_visible(show);
+            }
+        }
+    }
+    pub fn set_visible(&mut self, show: bool) {
+        match self {
+            HostWin::Own(w) => w.set_visible(show),
+            HostWin::External { window, .. } => window.set_visible(show),
+        }
+    }
+    /// Our own window, to draw or inject into (none for the app's).
+    pub fn own(&mut self) -> Option<&mut UiWindow> {
+        match self {
+            HostWin::Own(w) => Some(w),
+            HostWin::External { .. } => None,
+        }
+    }
+}
+
 /// One tool window and the dock of tabs in it.
 pub struct Host<T: Tab> {
     pub role: T::Role,
-    pub win: UiWindow,
+    pub win: HostWin,
     pub tree: Tree<T>,
     pub anim: Anim<T>,
 }
@@ -132,16 +210,60 @@ impl<T: Tab> Docks<T> {
     /// the hosts.
     pub fn add(&mut self, el: &ActiveEventLoop, gpu: &Gpu, role: T::Role, tree: Tree<T>) -> usize {
         let win = UiWindow::new(el, gpu, role.title(), role.size(), !self.headless);
-        self.hosts.push(Host { role, win, tree, anim: Anim::default() });
+        self.hosts.push(Host { role, win: HostWin::Own(win), tree, anim: Anim::default() });
         let i = self.hosts.len() - 1;
         self.retitle(i);
         i
     }
 
+    /// The app's own window as a host: the app runs its egui frame and
+    /// draws the dock into it with `draw_external` (and feeds `raw_input`
+    /// itself). Never retitled, never closed by the dock.
+    pub fn add_external(&mut self, role: T::Role, window: Arc<Window>, ctx: egui::Context, tree: Tree<T>) -> usize {
+        self.hosts.push(Host { role, win: HostWin::External { window, ctx }, tree, anim: Anim::default() });
+        self.hosts.len() - 1
+    }
+
+    pub fn is_external(&self, i: usize) -> bool {
+        self.hosts[i].win.is_external()
+    }
+
+    /// Every one of our own windows clears to this colour.
+    pub fn set_clear(&mut self, color: wgpu::Color) {
+        for h in &mut self.hosts {
+            if let Some(w) = h.win.own() {
+                w.clear = color;
+            }
+        }
+    }
+
+    /// Show `tab`'s leaf alone in its window (the rest fold away), or put
+    /// the layout back if it already is. The leaves glide either way.
+    pub fn solo(&mut self, tab: T) {
+        let Some(i) = self.host_of(tab) else { return };
+        let leaf = self.hosts[i].tree.find(tab);
+        let anim = &mut self.hosts[i].anim;
+        anim.solo = if anim.solo == leaf { None } else { leaf };
+        self.hosts[i].win.request_repaint();
+    }
+
+    /// The tab shown alone in window `i`, if one is.
+    pub fn soloed(&self, i: usize) -> Option<T> {
+        let h = &self.hosts[i];
+        h.anim.solo.and_then(|l| h.tree.active(l))
+    }
+
+    /// Put window `i`'s layout back (nothing alone).
+    pub fn unsolo(&mut self, i: usize) {
+        if self.hosts[i].anim.solo.take().is_some() {
+            self.hosts[i].win.request_repaint();
+        }
+    }
+
     /// `add`, but the window starts hidden (until its key or a tab opens).
     pub fn add_hidden(&mut self, el: &ActiveEventLoop, gpu: &Gpu, role: T::Role, tree: Tree<T>) -> usize {
         let i = self.add(el, gpu, role, tree);
-        self.hosts[i].win.window.set_visible(false);
+        self.hosts[i].win.window().set_visible(false);
         i
     }
 
@@ -176,7 +298,9 @@ impl<T: Tab> Docks<T> {
 
     pub fn poll(&mut self) {
         for h in &mut self.hosts {
-            h.win.poll();
+            if let Some(w) = h.win.own() {
+                w.poll();
+            }
         }
     }
 
@@ -236,7 +360,7 @@ impl<T: Tab> Docks<T> {
                         if let Ask::DetachAt(_, at) = ask {
                             // (Its title bar under the pointer, where it was let go.)
                             let at = winit::dpi::PhysicalPosition::new(at[0] - 60.0, at[1] - 12.0);
-                            self.hosts[i].win.window.set_outer_position(at);
+                            self.hosts[i].win.window().set_outer_position(at);
                         }
                         self.hosts[i].win.show();
                     }
@@ -259,7 +383,7 @@ impl<T: Tab> Docks<T> {
             self.drag = dragged.map(|tab| Drag { tab, from: i, over: None, at: None, drop: None });
         }
         let Some(d) = self.drag.filter(|d| d.from == i) else { return };
-        let (win, ctx) = (&self.hosts[i].win.window, self.hosts[i].win.ctx());
+        let (win, ctx) = (self.hosts[i].win.window(), self.hosts[i].win.ctx());
         let (pos, up) = ctx.input(|inp| (inp.pointer.latest_pos(), !inp.pointer.primary_down()));
         let Some(pos) = pos else { return };
         let outside = !ctx.content_rect().contains(pos);
@@ -294,6 +418,7 @@ impl<T: Tab> Docks<T> {
         let dropping = self.dropping_into(i);
         let Docks { hosts, asks, .. } = self;
         let Host { win, tree, anim, .. } = &mut hosts[i];
+        let Some(win) = win.own() else { return None };
         let mut app = DockApp { tree, anim, here: i, others, open, asks, panels, dragged: None, dropping, drop_here: None };
         let tex = match offscreen {
             Some(events) => {
@@ -307,13 +432,40 @@ impl<T: Tab> Docks<T> {
         };
         let dragged = app.dragged;
         let drop_here = app.drop_here;
+        self.after_frame(i, dragged, drop_here);
+        tex
+    }
+
+    /// The dock drawn into the app's own egui frame (an external host):
+    /// `ui` is the room it gets. Call `raw_input` before the frame.
+    pub fn draw_external<P: Panels<T>>(&mut self, i: usize, ui: &mut egui::Ui, panels: &mut P) {
+        let others = self.others(i);
+        let open = self.open_tabs();
+        let dropping = self.dropping_into(i);
+        let Docks { hosts, asks, .. } = self;
+        let Host { tree, anim, .. } = &mut hosts[i];
+        let mut app = DockApp { tree, anim, here: i, others, open, asks, panels, dragged: None, dropping, drop_here: None };
+        crate::shell::UiApp::ui(&mut app, ui);
+        let dragged = app.dragged;
+        let drop_here = app.drop_here;
+        self.after_frame(i, dragged, drop_here);
+    }
+
+    /// Before an external host's egui frame: the panels' claim on the raw
+    /// input (a canvas' chords).
+    pub fn raw_input<P: Panels<T>>(&mut self, i: usize, raw: &mut egui::RawInput, panels: &mut P) {
+        let tabs = self.hosts[i].tree.tabs();
+        let ctx = self.hosts[i].win.ctx().clone();
+        panels.raw_input(&ctx, raw, &tabs);
+    }
+
+    fn after_frame(&mut self, i: usize, dragged: Option<T>, drop_here: Option<Drop>) {
         if let Some(d) = &mut self.drag {
             if d.over == Some(i) {
                 d.drop = drop_here;
             }
         }
         self.track(i, dragged);
-        tex
     }
 
     /// A window event for host `i`: redraws are the caller's (they need
@@ -321,12 +473,13 @@ impl<T: Tab> Docks<T> {
     /// the rest reach egui. True if the caller should draw the window.
     pub fn event(&mut self, gpu: &Gpu, i: usize, event: &winit::event::WindowEvent) -> bool {
         use winit::event::WindowEvent as E;
+        let Some(win) = self.hosts[i].win.own() else { return false };
         match event {
             E::RedrawRequested => return true,
             E::CloseRequested => {
                 self.close_requested(i);
             }
-            _ => self.hosts[i].win.on_event(gpu, event),
+            _ => win.on_event(gpu, event),
         }
         false
     }
@@ -337,7 +490,7 @@ impl<T: Tab> Docks<T> {
             .hosts
             .iter()
             .map(|h| {
-                let w = &h.win.window;
+                let w = h.win.window();
                 let at = w.outer_position().ok().map(|p| [p.x as f64, p.y as f64]);
                 let size = w.inner_size();
                 let k = w.scale_factor();
@@ -352,7 +505,7 @@ impl<T: Tab> Docks<T> {
     pub fn restore(&mut self, el: &ActiveEventLoop, gpu: &Gpu, layout: Layout<T, T::Role>) {
         for s in layout.windows {
             let i = self.add(el, gpu, s.role, s.tree);
-            let w = &self.hosts[i].win.window;
+            let w = self.hosts[i].win.window();
             if let Some(size) = s.size {
                 let _ = w.request_inner_size(winit::dpi::LogicalSize::new(size[0].max(100), size[1].max(80)));
             }
@@ -370,7 +523,7 @@ impl<T: Tab> Docks<T> {
     pub fn dropping_into(&self, i: usize) -> Option<(T, egui::Pos2)> {
         let d = self.drag.filter(|d| d.over == Some(i))?;
         let at = d.at?;
-        let win = &self.hosts[i].win.window;
+        let win = self.hosts[i].win.window();
         let o = win.inner_position().ok()?;
         let k = win.scale_factor();
         Some((d.tab, egui::pos2(((at[0] - o.x as f64) / k) as f32, ((at[1] - o.y as f64) / k) as f32)))
@@ -383,7 +536,7 @@ impl<T: Tab> Docks<T> {
             .enumerate()
             .filter(|(_, h)| h.win.is_visible())
             .filter_map(|(i, h)| {
-                let (o, size) = (h.win.window.outer_position().ok()?, h.win.window.outer_size());
+                let (o, size) = (h.win.window().outer_position().ok()?, h.win.window().outer_size());
                 let min = [o.x as f64, o.y as f64];
                 Some((i, drag::Frame { min, max: [min[0] + size.width as f64, min[1] + size.height as f64] }))
             })
@@ -394,7 +547,7 @@ impl<T: Tab> Docks<T> {
     /// goes; any other is hidden. True if it was taken away.
     pub fn close_requested(&mut self, i: usize) -> bool {
         if !self.hosts[i].role.is_detached() {
-            self.hosts[i].win.window.set_visible(false);
+            self.hosts[i].win.set_visible(false);
             return false;
         }
         let host = self.hosts.remove(i);
@@ -431,8 +584,11 @@ impl<T: Tab> Docks<T> {
     }
 
     fn retitle(&mut self, i: usize) {
+        if self.hosts[i].win.is_external() {
+            return;
+        }
         let t = self.title(&self.hosts[i]);
-        self.hosts[i].win.window.set_title(&t);
+        self.hosts[i].win.window().set_title(&t);
     }
 
     /// A window's title: its role's, or for a detached one what it holds.

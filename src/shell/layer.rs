@@ -13,7 +13,8 @@ use super::Gpu;
 /// implement the trait to also see the raw input before egui does.
 pub trait UiApp {
     /// Runs once per frame before egui: claim or rewrite input events.
-    fn raw_input(&mut self, _raw: &mut egui::RawInput) {}
+    /// `ctx` is the layer's context (what has focus, the last pointer).
+    fn raw_input(&mut self, _ctx: &egui::Context, _raw: &mut egui::RawInput) {}
     fn ui(&mut self, ui: &mut egui::Ui);
 }
 
@@ -85,7 +86,7 @@ impl EguiLayer {
         app: &mut dyn UiApp,
     ) -> Option<Duration> {
         let mut input = self.state.take_egui_input(window);
-        app.raw_input(&mut input);
+        app.raw_input(&self.ctx, &mut input);
         let mut out = self.ctx.run_ui(input, |ui| app.ui(ui));
         self.state.handle_platform_output(window, std::mem::take(&mut out.platform_output));
 

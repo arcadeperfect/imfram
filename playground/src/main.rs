@@ -76,7 +76,7 @@ impl App {
         // window (the Colour leaf's right edge), hold there; let go.
         let ctx = s.docks.hosts[0].win.ctx().clone();
         let from = imfram::dock::tab_rect(&ctx, Tab::Widgets).expect("the tab was drawn").center();
-        let size = s.docks.hosts[0].win.size();
+        let size = s.docks.hosts[0].win.own().expect("our window").size();
         let ppp = ctx.pixels_per_point();
         let to = egui::pos2(size[0] as f32 / ppp - 40.0, size[1] as f32 / ppp * 0.5);
         let press = vec![
@@ -121,7 +121,7 @@ impl App {
         }
         let ctx = s.docks.hosts[0].win.ctx().clone();
         let from = imfram::dock::tab_rect(&ctx, Tab::Widgets).expect("the tab was drawn").center();
-        let size = s.docks.hosts[0].win.size();
+        let size = s.docks.hosts[0].win.own().expect("our window").size();
         let ppp = ctx.pixels_per_point();
         let (w, h) = (size[0] as f32 / ppp, size[1] as f32 / ppp);
         let stops = [

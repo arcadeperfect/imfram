@@ -23,8 +23,8 @@ use crate::shell::UiApp;
 /// What the app draws in a window: each tab, and anything round the dock.
 pub trait Panels<T: Tab> {
     /// Before egui sees the frame's input: claim or rewrite events (a
-    /// canvas' chords). `tabs` are the window's tabs.
-    fn raw_input(&mut self, _raw: &mut egui::RawInput, _tabs: &[T]) {}
+    /// canvas' chords). `ctx` is the window's; `tabs` are its tabs.
+    fn raw_input(&mut self, _ctx: &egui::Context, _raw: &mut egui::RawInput, _tabs: &[T]) {}
     /// Before the top bar (an editor's frame begins).
     fn begin(&mut self, _ui: &mut Ui) {}
     /// Items in the top bar, left of the "panels" menu.
@@ -47,11 +47,13 @@ pub trait Panels<T: Tab> {
 pub struct Anim<T> {
     rects: HashMap<LeafId, Rect>,
     drag: Option<T>,
+    /// A leaf shown alone (the rest folded away).
+    pub solo: Option<LeafId>,
 }
 
 impl<T> Default for Anim<T> {
     fn default() -> Self {
-        Self { rects: HashMap::new(), drag: None }
+        Self { rects: HashMap::new(), drag: None, solo: None }
     }
 }
 
@@ -84,9 +86,9 @@ pub struct DockApp<'b, T: Tab, P: Panels<T>> {
 }
 
 impl<T: Tab, P: Panels<T>> UiApp for DockApp<'_, T, P> {
-    fn raw_input(&mut self, raw: &mut egui::RawInput) {
+    fn raw_input(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         let tabs = self.tree.tabs();
-        self.panels.raw_input(raw, &tabs);
+        self.panels.raw_input(ctx, raw, &tabs);
     }
 
     fn ui(&mut self, ui: &mut Ui) {
@@ -163,11 +165,20 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         }
         self.dragged = mine;
 
-        // Where every leaf is heading, and the glide toward it.
-        let target = match &proposal {
+        // Where every leaf is heading, and the glide toward it. A leaf
+        // shown alone takes the whole area; the rest fold away.
+        if self.anim.solo.is_some_and(|l| !self.tree.has_leaf(l)) {
+            self.anim.solo = None;
+        }
+        let solo = self.anim.solo.filter(|_| drag.is_none());
+        let mut target = match &proposal {
             Some(p) => p.layout(area, GAP),
             None => self.tree.layout(area, GAP),
         };
+        if let Some(l) = solo {
+            target.seps.clear();
+            target.leaves = vec![(l, area)];
+        }
         let dt = ctx.input(|i| i.stable_dt).min(0.1);
         let k = 1.0 - (-GLIDE * dt).exp();
         let mut moving = false;
@@ -196,8 +207,9 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
             ctx.request_repaint();
         }
 
-        // Separators (from the tree as it is: not while a drag reshapes it).
-        if drag.is_none() {
+        // Separators (from the tree as it is: not while a drag reshapes it,
+        // nor while a leaf is alone).
+        if drag.is_none() && solo.is_none() {
             for (path, band, whole, dir) in &real.seps {
                 self.separator(ui, path, *band, *whole, *dir);
             }

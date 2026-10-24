@@ -69,6 +69,12 @@ pub trait Tab: Copy + Eq + Hash + Debug + Serialize + serde::de::DeserializeOwne
     fn strip(self) -> Option<f32> {
         None
     }
+    /// It stays in the window it is in: dragged, it moves about within
+    /// that window only, and its menu has no detach, move or close (an
+    /// app's main view, drawn by that window alone).
+    fn pinned(self) -> bool {
+        false
+    }
 }
 
 /// What a window is for: its title and size. One role is "a window a tab
@@ -397,6 +403,8 @@ impl<T: Tab> Docks<T> {
             let k = win.scale_factor();
             [o.x as f64 + pos.x as f64 * k, o.y as f64 + pos.y as f64 * k]
         });
+        // (A pinned tab never leaves its window: past the edge it lands nowhere.)
+        let outside = outside && !d.tab.pinned();
         let over = if outside { screen.and_then(|p| drag::under(&self.frames(), p, i)) } else { None };
         // (The window under the pointer draws the landing as it moves.)
         for w in [d.over, over].into_iter().flatten() {

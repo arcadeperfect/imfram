@@ -179,7 +179,7 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
                 "" => tab.help().to_string(),
                 k => format!("{} ({k})", tab.help()),
             };
-            let r = ui.checkbox(&mut open, tab.title()).on_hover_text(tip);
+            let r = ui.add_enabled(!tab.pinned(), egui::Checkbox::new(&mut open, tab.title())).on_hover_text(tip);
             if r.changed() {
                 self.asks.push(if open { Ask::Open(tab) } else { Ask::Close(tab) });
             }
@@ -366,7 +366,10 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         if bars {
             p.rect_filled(bar, egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 }, vis.faint_bg_color);
         }
-        p.rect_stroke(rect, 4.0, vis.window_stroke, egui::StrokeKind::Inside);
+        // (A see-through body is a picture: it is its own edge.)
+        if !clear {
+            p.rect_stroke(rect, 4.0, vis.window_stroke, egui::StrokeKind::Inside);
+        }
 
         let mut set_active = None;
         if bars {
@@ -395,14 +398,16 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
                 p.rect_filled(r, 3.0, fill);
                 let tc = if in_hand { vis.weak_text_color() } else if is_active { vis.strong_text_color() } else { vis.text_color() };
                 p.galley(r.min + vec2(6.0, 3.0), galley, tc);
-                // The close cross.
-                let cx = Rect::from_center_size(pos2(r.max.x - 10.0, r.center().y), vec2(12.0, 12.0));
-                let close = ui.interact(cx, Id::new(("dock close", self.here, *tab)), Sense::click());
-                let xc = if close.hovered() { vis.strong_text_color() } else { vis.weak_text_color() };
-                p.line_segment([cx.min + vec2(3.0, 3.0), cx.max - vec2(3.0, 3.0)], Stroke::new(1.2, xc));
-                p.line_segment([pos2(cx.max.x - 3.0, cx.min.y + 3.0), pos2(cx.min.x + 3.0, cx.max.y - 3.0)], Stroke::new(1.2, xc));
-                if close.clicked() {
-                    self.asks.push(Ask::Close(*tab));
+                // The close cross (none on a pinned tab).
+                if !tab.pinned() {
+                    let cx = Rect::from_center_size(pos2(r.max.x - 10.0, r.center().y), vec2(12.0, 12.0));
+                    let close = ui.interact(cx, Id::new(("dock close", self.here, *tab)), Sense::click());
+                    let xc = if close.hovered() { vis.strong_text_color() } else { vis.weak_text_color() };
+                    p.line_segment([cx.min + vec2(3.0, 3.0), cx.max - vec2(3.0, 3.0)], Stroke::new(1.2, xc));
+                    p.line_segment([pos2(cx.max.x - 3.0, cx.min.y + 3.0), pos2(cx.min.x + 3.0, cx.max.y - 3.0)], Stroke::new(1.2, xc));
+                    if close.clicked() {
+                        self.asks.push(Ask::Close(*tab));
+                    }
                 }
                 if self.tab_handle(resp, *tab) {
                     set_active = Some(*tab);
@@ -418,7 +423,9 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
 
         // The body.
         let Some(tab) = tabs.get(active).copied() else { return };
-        let inner = body.shrink2(vec2(4.0, 2.0));
+        // (A see-through body takes the leaf to its edges: the picture
+        // behind it is drawn there.)
+        let inner = if clear { body } else { body.shrink2(vec2(4.0, 2.0)) };
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).id_salt(("dock body", id)));
         child.set_clip_rect(inner);
         if !bars {
@@ -524,6 +531,9 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         let clicked = resp.clicked();
         let others = self.others.clone();
         let asks = &mut *self.asks;
+        if tab.pinned() {
+            return clicked;
+        }
         resp.context_menu(|ui| {
             if ui.button("detach to its own window").clicked() {
                 asks.push(Ask::Detach(tab));

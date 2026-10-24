@@ -41,6 +41,7 @@ cargo run -p playground -- --shot DIR   # each window once to DIR/<role>.png
 | `props`       | new    | the properties sheet: aligned rows, reset dots, key dots        |
 | `outliner`    | new    | a tree view: select, rename, drag to reorder or reparent        |
 | `table`       | new    | sortable, resizable columns over virtual rows                   |
+| `gallery`     | new    | thumbnails over any items (`Items`): justified rows, sections, lazy off-thread loads (`Thumbs`: visible first, scrolled-past never loaded, uploads spread over frames, texel budget, size buckets with a stand-in), hover scrub through clips, box select, cmd-wheel resize that holds the tile under the pointer, drag out as a `Dragged` payload; `List` is the same items as rows (a thumbnail column that scrubs, sortable resizable `Details` columns, row-size zoom); `files` lists a folder with frame sequences grouped and movies probed off-thread; `browse::FileView` is both views over it with a path bar (native) |
 | `palette`     | new    | a command palette: fuzzy search over actions, recent first      |
 | `dialog`      | new    | modal confirm, prompt, progress; a settings-window frame        |
 | `toast` / `statusbar` | new | transient notices; a bottom strip with a flash and progress |

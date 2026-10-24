@@ -50,7 +50,7 @@ impl App {
         side.split(Side::Bottom, 0.7, vec![Tab::Keys]);
         docks.add(el, &gpu, Role::Side, side);
         docks.add_hidden(el, &gpu, Role::Spare, Tree::new(vec![Tab::Nothing]));
-        let views = Tree::new(vec![Tab::Props, Tab::Outliner, Tab::Table, Tab::Timeline, Tab::Image, Tab::Palette, Tab::Dialogs, Tab::Toasts, Tab::Theme, Tab::Keymap]);
+        let views = Tree::new(vec![Tab::Folder, Tab::Gallery, Tab::Props, Tab::Outliner, Tab::Table, Tab::Timeline, Tab::Image, Tab::Palette, Tab::Dialogs, Tab::Toasts, Tab::Theme, Tab::Keymap]);
         docks.add(el, &gpu, Role::Views, views);
         self.state = Some(State { gpu, docks, panels: Playground::default() });
     }

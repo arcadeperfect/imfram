@@ -50,6 +50,8 @@ fn tab_id(t: Tab) -> &'static str {
         Tab::Props => "tab-props",
         Tab::Outliner => "tab-outliner",
         Tab::Table => "tab-table",
+        Tab::Gallery => "tab-gallery",
+        Tab::Folder => "tab-folder",
         Tab::Timeline => "tab-timeline",
         Tab::Image => "tab-image",
         Tab::Palette => "tab-palette",

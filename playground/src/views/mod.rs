@@ -4,6 +4,8 @@
 
 pub mod canvas;
 pub mod dialog;
+pub mod files;
+pub mod gallery;
 pub mod imageview;
 pub mod keymap;
 pub mod outliner;
@@ -22,6 +24,8 @@ pub struct Views {
     pub table: table::State,
     pub palette: palette::State,
     pub dialog: dialog::State,
+    pub gallery: gallery::State,
+    pub files: files::State,
     pub timeline: timeline::State,
     pub imageview: imageview::State,
     pub props: props::State,

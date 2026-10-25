@@ -67,6 +67,18 @@ pub trait Panels<T: Tab> {
     fn tabs_in_bar(&self) -> bool {
         false
     }
+    /// The fill of the tab on show in each leaf (its text goes dark or
+    /// light to read on it). None: the theme's.
+    fn tab_colour(&self) -> Option<Color32> {
+        None
+    }
+}
+
+/// Text that reads on `fill`: near black on a light fill, near white on a
+/// dark one.
+fn ink_on(fill: Color32) -> Color32 {
+    let l = 0.2126 * fill.r() as f32 + 0.7152 * fill.g() as f32 + 0.0722 * fill.b() as f32;
+    if l > 140.0 { Color32::from_gray(16) } else { Color32::from_gray(240) }
 }
 
 /// What a compact leaf hands its tab to size the patch (`grip`): the
@@ -454,9 +466,10 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
                 }
                 let resp = ui.interact(r, Id::new(("dock tab", self.here, *tab)), Sense::click_and_drag());
                 ui.ctx().data_mut(|d| d.insert_temp(super::viewer::tab_rect_id(*tab), r));
-                let fill = if is_active { vis.widgets.active.bg_fill } else if resp.hovered() { vis.widgets.hovered.bg_fill } else { Color32::TRANSPARENT };
+                let on = self.panels.tab_colour().filter(|_| is_active);
+                let fill = if let Some(c) = on { c } else if is_active { vis.widgets.active.bg_fill } else if resp.hovered() { vis.widgets.hovered.bg_fill } else { Color32::TRANSPARENT };
                 p.rect_filled(r, 3.0, fill);
-                let tc = if in_hand { vis.weak_text_color() } else if is_active { vis.strong_text_color() } else { vis.text_color() };
+                let tc = if in_hand { vis.weak_text_color() } else if let Some(c) = on { ink_on(c) } else if is_active { vis.strong_text_color() } else { vis.text_color() };
                 p.galley(r.min + vec2(6.0, 3.0), galley, tc);
                 // The close cross (none on a pinned tab).
                 if !tab.pinned() {
@@ -575,7 +588,17 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         for (i, &tab) in tabs.iter().enumerate() {
             let text = egui::RichText::new(tab.title());
             let text = if drag == Some(tab) { text.weak() } else { text };
-            let resp = ui.add(egui::Button::selectable(i == active, text).sense(Sense::click_and_drag()));
+            let colour = self.panels.tab_colour();
+            let resp = ui
+                .scope(|ui| {
+                    if let Some(c) = colour {
+                        let sel = &mut ui.visuals_mut().selection;
+                        sel.bg_fill = c;
+                        sel.stroke.color = ink_on(c);
+                    }
+                    ui.add(egui::Button::selectable(i == active, text).sense(Sense::click_and_drag()))
+                })
+                .inner;
             ui.ctx().data_mut(|d| d.insert_temp(super::viewer::tab_rect_id(tab), resp.rect));
             if self.tab_handle(resp, tab) {
                 clicked = Some(tab);
@@ -629,9 +652,10 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
                 let resp = ui.interact(cr, Id::new(("dock chip", self.here, tab)), Sense::click_and_drag());
                 ui.ctx().data_mut(|d| d.insert_temp(super::viewer::tab_rect_id(tab), cr));
                 let on = i == active;
-                let fill = if on { vis.widgets.active.bg_fill } else if resp.hovered() { vis.widgets.hovered.bg_fill } else { Color32::TRANSPARENT };
+                let colour = self.panels.tab_colour().filter(|_| on);
+                let fill = if let Some(c) = colour { c } else if on { vis.widgets.active.bg_fill } else if resp.hovered() { vis.widgets.hovered.bg_fill } else { Color32::TRANSPARENT };
                 p.rect_filled(cr, 3.0, fill);
-                let tc = if drag == Some(tab) { vis.weak_text_color() } else if on { vis.strong_text_color() } else { vis.weak_text_color() };
+                let tc = if drag == Some(tab) { vis.weak_text_color() } else if let Some(c) = colour { ink_on(c) } else if on { vis.strong_text_color() } else { vis.weak_text_color() };
                 p.galley(pos2(cr.min.x + CHIP_PAD * 0.5, cr.center().y - galley.size().y * 0.5), galley, tc);
                 if self.tab_handle(resp, tab) {
                     clicked = Some(tab);

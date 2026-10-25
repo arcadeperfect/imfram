@@ -78,6 +78,14 @@ pub trait Panels<T: Tab> {
     fn may_solo(&self, _tab: &T) -> bool {
         true
     }
+    /// Whether a tab keeps the keyboard to itself while the pointer is
+    /// over it (a game view that reads its keys off the window, not off
+    /// egui): key presses and typed text never reach egui there, so the
+    /// other panels' hotkeys and the solo key do not fire over it. Not
+    /// while a text field has focus: it keeps its typing.
+    fn owns_keys(&self, _tab: &T) -> bool {
+        false
+    }
     /// The fill of the tab on show in each leaf (its text goes dark or
     /// light to read on it). None: the theme's.
     fn tab_colour(&self) -> Option<Color32> {
@@ -132,6 +140,29 @@ fn grip_width(ui: &Ui, titles: &[&'static str]) -> f32 {
     GRIP_W + chips
 }
 
+/// Over a tab that keeps its keys (`Panels::owns_keys`): the frame's key
+/// presses and typed text taken out of egui's input. Releases stay, so
+/// nothing is left held. The pointer is this input's, else the last
+/// frame's; the leaves are where they were last drawn.
+pub(super) fn keys_to_owner<T: Tab, P: Panels<T>>(tree: &Tree<T>, anim: &Anim<T>, ctx: &egui::Context, raw: &mut egui::RawInput, panels: &P) {
+    if ctx.text_edit_focused() {
+        return;
+    }
+    let moved = raw.events.iter().rev().find_map(|e| match e {
+        egui::Event::PointerMoved(p) => Some(Some(*p)),
+        egui::Event::PointerGone => Some(None),
+        _ => None,
+    });
+    let Some(p) = moved.unwrap_or_else(|| ctx.input(|i| i.pointer.latest_pos())) else { return };
+    let Some(leaf) = anim.rects.iter().find(|(_, r)| r.contains(p)).map(|(l, _)| *l) else { return };
+    if !tree.active(leaf).is_some_and(|t| panels.owns_keys(&t)) {
+        return;
+    }
+    raw.events.retain(|e| {
+        !matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::Text(_) | egui::Event::Copy | egui::Event::Cut | egui::Event::Paste(_))
+    });
+}
+
 /// The leaves' rects as drawn: on their way to where the tree puts them;
 /// and the tab this window has in a drag.
 pub struct Anim<T> {
@@ -183,6 +214,7 @@ impl<T: Tab, P: Panels<T>> UiApp for DockApp<'_, T, P> {
     fn raw_input(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         let tabs = self.tree.tabs();
         self.panels.raw_input(ctx, raw, &tabs);
+        keys_to_owner(self.tree, self.anim, ctx, raw, &*self.panels);
     }
 
     fn ui(&mut self, ui: &mut Ui) {
@@ -843,6 +875,9 @@ mod solo_tests {
         fn may_solo(&self, tab: &P) -> bool {
             *tab != P::Game
         }
+        fn owns_keys(&self, tab: &P) -> bool {
+            *tab == P::Game
+        }
     }
 
     /// One frame of a window holding P::Left | P::Game, the pointer at `at`.
@@ -884,5 +919,22 @@ mod solo_tests {
         assert_eq!(anim.solo, None, "Q again, anywhere: back");
         frame(&ctx, &mut tree, &mut anim, right, true);
         assert_eq!(anim.solo, None, "a panel that keeps Q for itself is never soloed");
+    }
+
+    #[test]
+    fn over_a_panel_that_owns_its_keys_no_key_press_reaches_egui() {
+        let ctx = egui::Context::default();
+        let mut tree = Tree::new(vec![P::Left]);
+        tree.split(Side::Right, 0.5, vec![P::Game]);
+        let mut anim = Anim::default();
+        frame(&ctx, &mut tree, &mut anim, pos2(100.0, 150.0), false);
+        let key = |pressed| egui::Event::Key { key: egui::Key::G, physical_key: None, pressed, repeat: false, modifiers: Default::default() };
+        let at = |p: Pos2| egui::RawInput { events: vec![egui::Event::PointerMoved(p), key(true), key(false), egui::Event::Text("g".into())], ..Default::default() };
+        let mut over_game = at(pos2(300.0, 150.0));
+        keys_to_owner(&tree, &anim, &ctx, &mut over_game, &Two);
+        assert_eq!(over_game.events, vec![egui::Event::PointerMoved(pos2(300.0, 150.0)), key(false)], "over the game: only the release is left");
+        let mut over_left = at(pos2(100.0, 150.0));
+        keys_to_owner(&tree, &anim, &ctx, &mut over_left, &Two);
+        assert_eq!(over_left.events.len(), 4, "over another panel: every key is egui's");
     }
 }

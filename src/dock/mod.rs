@@ -513,6 +513,8 @@ impl<T: Tab> Docks<T> {
         let tabs = self.hosts[i].tree.tabs();
         let ctx = self.hosts[i].win.ctx().clone();
         panels.raw_input(&ctx, raw, &tabs);
+        let h = &self.hosts[i];
+        frame::keys_to_owner(&h.tree, &h.anim, &ctx, raw, &*panels);
     }
 
     fn after_frame(&mut self, i: usize, dragged: Option<T>, group: bool, drop_here: Option<Drop>) {

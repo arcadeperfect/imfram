@@ -20,6 +20,8 @@ pub const TRI_W: f32 = 14.0;
 pub const ICON_W: f32 = 18.0;
 /// A checkbox's column.
 pub const CHECK_W: f32 = 18.0;
+/// The column of a row's button, at its right.
+pub const BUTTON_W: f32 = 20.0;
 /// A checkbox's side, and a swatch's.
 const BOX: f32 = 12.0;
 /// Space after the triangle's column.
@@ -132,6 +134,8 @@ pub struct Lead<'a> {
     pub swatch: Option<Color32>,
     pub icon: Option<&'a str>,
     pub dimmed: bool,
+    /// A button at the row's right (the label stops short of it).
+    pub button: bool,
 }
 
 impl Lead<'_> {
@@ -150,7 +154,21 @@ pub fn check_rect<Id>(rect: Rect, row: &Row<Id>) -> Rect {
 
 pub fn label_rect<Id>(rect: Rect, row: &Row<Id>, lead: &Lead) -> Rect {
     let x = tri_rect(rect, row).right() + GAP + lead.width();
-    Rect::from_min_max(Pos2::new(x, rect.top()), rect.max)
+    let right = if lead.button { button_rect(rect).left() - GAP } else { rect.right() };
+    Rect::from_min_max(Pos2::new(x, rect.top()), Pos2::new(right.max(x), rect.bottom()))
+}
+
+/// The button's column, at the row's right.
+pub fn button_rect(rect: Rect) -> Rect {
+    Rect::from_min_max(Pos2::new(rect.right() - BUTTON_W - GAP, rect.top()), Pos2::new(rect.right() - GAP, rect.bottom()))
+}
+
+/// A row's button: a rounded box filled with the accent when on.
+pub fn paint_button(p: &Painter, r: Rect, b: super::RowButton, hovered: bool, pt: &Paint) {
+    let r = Rect::from_center_size(r.center(), Vec2::new(BUTTON_W - 2.0, ROW_H - 6.0));
+    let (bg, fg) = if b.on { (pt.accent, Color32::BLACK) } else if hovered { (pt.hover, pt.text) } else { (pt.check_bg, pt.weak) };
+    p.rect_filled(r, 3.0, bg);
+    p.text(r.center(), Align2::CENTER_CENTER, b.text, FontId::proportional(pt.font.size * 0.8), fg);
 }
 
 /// Background, triangle, icon; the label unless `skip_label` (a rename
@@ -189,7 +207,7 @@ pub fn paint_row<Id>(p: &Painter, rect: Rect, row: &Row<Id>, label: &str, lead: 
     }
     let fg = if lead.dimmed && !look.selected { pt.weak } else { fg };
     if !skip_label {
-        let clip = Rect::from_min_max(Pos2::new(x, rect.top()), rect.max);
+        let clip = label_rect(rect, row, lead);
         p.with_clip_rect(clip.intersect(p.clip_rect())).text(Pos2::new(x, rect.center().y), Align2::LEFT_CENTER, label, pt.font.clone(), fg);
     }
 }

@@ -16,6 +16,8 @@
 //! label (`dimmed`), which is what a flat list of switchable things needs
 //! (graav's biomes). `can_move` false keeps a row where it is.
 //! `show_fit` sizes the view to its rows, for a list inside a scrolling panel.
+//! A small button at the row's right (`button`; a click says `Button`) is
+//! for one thing done to the row, a solo, say.
 
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -30,7 +32,7 @@ pub(crate) mod drive;
 #[cfg(test)]
 mod tests;
 
-pub use row::{Row, CHECK_W, GAP, ICON_W, INDENT, ROW_H, TRI_W};
+pub use row::{Row, BUTTON_W, CHECK_W, GAP, ICON_W, INDENT, ROW_H, TRI_W};
 use row::{Lead, Look, Paint, RenameOut, Slot};
 
 /// The app's tree, read-only. Children are asked for on demand, so a
@@ -63,6 +65,18 @@ pub trait TreeModel {
     fn can_move(&self, _id: Self::Id) -> bool {
         true
     }
+    /// A small button at the row's right. None: no button.
+    fn button(&self, _id: Self::Id) -> Option<RowButton> {
+        None
+    }
+}
+
+/// A row's button: a letter or two, lit when on, and what it does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowButton {
+    pub text: &'static str,
+    pub on: bool,
+    pub hover: &'static str,
 }
 
 /// A row's checkbox.
@@ -86,6 +100,8 @@ pub enum Event<Id> {
     Activate(Id),
     /// The row's checkbox was clicked: what it asks to be now.
     Check(Id, bool),
+    /// The row's button was clicked.
+    Button(Id),
 }
 
 struct Rename<Id> {
@@ -225,9 +241,22 @@ impl<Id: Copy + Eq + Hash + Debug> Outliner<Id> {
         };
         let icon = m.icon(row.id);
         let check = m.check(row.id);
-        let lead = Lead { check, swatch: m.swatch(row.id), icon, dimmed: m.dimmed(row.id) };
+        let button = m.button(row.id);
+        let lead = Lead { check, swatch: m.swatch(row.id), icon, dimmed: m.dimmed(row.id), button: button.is_some() };
         let label = m.label(row.id);
         row::paint_row(ui.painter(), rect, &row, &label, &lead, self.expanded.contains(&row.id), &look, pt, renaming);
+        if let Some(b) = button {
+            // Its own widget over the row's, so it takes its clicks (a
+            // quick second one too) and shows what it does.
+            let r = row::button_rect(rect);
+            let br = ui.interact(r, base.with(("button", row.id)), Sense::click());
+            row::paint_button(ui.painter(), r, b, br.hovered(), pt);
+            if br.clicked() {
+                ui.memory_mut(|mem| mem.request_focus(base));
+                ev.push(Event::Button(row.id));
+            }
+            br.on_hover_text(b.hover);
+        }
         if renaming {
             let r = self.rename.as_mut().unwrap();
             let fresh = std::mem::replace(&mut r.fresh, false);

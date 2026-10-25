@@ -16,6 +16,9 @@
 //!   the wire, right-click it to take it out
 //! - hold E over a node and move right to widen it, left to narrow it
 //! - T tidies: wobble's layered layout, the nodes gliding there
+//! - click a node to select it (shift-click adds / takes it out), drag
+//!   the background to select in a box (shift adds); dragging a selected
+//!   node moves them all; Delete / Backspace deletes them
 //! - hover a node's title or a port for what it does
 //! - pan / zoom with the shared navigation hands (`crate::nav`)
 //!
@@ -55,7 +58,7 @@ mod view;
 pub mod wires;
 mod wiring;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use egui::{vec2, Align2, FontId, Modifiers, PointerButton, Pos2, Rect, Sense, Shape, Ui, Vec2};
 
@@ -100,6 +103,8 @@ pub struct Input<'a> {
     pub shift: bool,
     /// T was pressed: tidy the graph.
     pub tidy: bool,
+    /// Delete / Backspace was pressed: delete the selected nodes.
+    pub delete: bool,
 }
 
 /// Chords the canvas takes for itself: navigation, and ctrl-drag to cut
@@ -134,6 +139,11 @@ pub struct NodeView<Id> {
     /// The node whose ports court (`magnet`): the one being dragged, or
     /// just dropped while the pointer is still on it.
     magnet_node: Option<Id>,
+    /// The selected nodes.
+    selected: HashSet<Id>,
+    /// A box select in progress: its corner (canvas), and what was
+    /// selected before it (kept when shift began it).
+    marquee: Option<(Pos2, HashSet<Id>)>,
     /// Draw the key strip along the top.
     pub show_strip: bool,
     /// Last frame's ports in window coordinates (scripted self-tests).
@@ -151,6 +161,8 @@ impl<Id> Default for NodeView<Id> {
             heights: HashMap::new(),
             stretch: None,
             magnet_node: None,
+            selected: HashSet::new(),
+            marquee: None,
             show_strip: true,
             ports_on_screen: Vec::new(),
         }
@@ -170,6 +182,11 @@ impl<Id: Clone + Eq + std::hash::Hash + std::fmt::Debug + Ord> NodeView<Id> {
 
     pub fn to_canvas(&self, window: Pos2) -> Pos2 {
         self.view.to_canvas(window)
+    }
+
+    /// The selected nodes.
+    pub fn selected(&self) -> &HashSet<Id> {
+        &self.selected
     }
 
     /// The add-node popup is open.
@@ -215,7 +232,7 @@ impl<Id: Clone + Eq + std::hash::Hash + std::fmt::Debug + Ord> NodeView<Id> {
             ui.ctx().request_repaint();
         }
 
-        let (outer, background) = ui.allocate_exact_size(ui.available_size(), Sense::click());
+        let (outer, background) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         let pointer_win = ui.input(|i| i.pointer.latest_pos());
         let hovered = pointer_win.is_some_and(|p| outer.contains(p));
 
@@ -232,7 +249,30 @@ impl<Id: Clone + Eq + std::hash::Hash + std::fmt::Debug + Ord> NodeView<Id> {
         let clicked = ui.input(|i| i.pointer.primary_clicked());
         let dot_at = pointer.filter(|_| clicked && input.shift && keys_here);
         let keys = Keys { grab: input.grab && keys_here, stretch: input.stretch && keys_here, shift: input.shift && keys_here, dot_at };
+        // Selection: a click on the background clears it, a drag there
+        // boxes it (shift keeps what was selected).
+        let shift_held = ui.input(|i| i.modifiers.shift);
+        if background.clicked() && !shift_held {
+            self.selected.clear();
+        }
+        if background.drag_started_by(PointerButton::Primary) {
+            if let Some(p) = ui.input(|i| i.pointer.press_origin()) {
+                let base = if shift_held { self.selected.clone() } else { HashSet::new() };
+                self.marquee = Some((self.view.to_canvas(p), base));
+            }
+        }
         let bounds = self.frame(&mut canvas, g, pointer, keys, &mut edit);
+        if !background.dragged() {
+            self.marquee = None;
+        }
+        if input.delete && keys_here {
+            for id in std::mem::take(&mut self.selected) {
+                if g.nodes().contains(&id) && g.deletable(&id) {
+                    g.remove(&id);
+                    edit.changed = true;
+                }
+            }
+        }
         self.view.fit_if_pending(ui, outer, bounds);
         if self.show_strip {
             let strip = outer.shrink2(egui::vec2(12.0, 14.0));
@@ -276,10 +316,14 @@ impl<Id: Clone + Eq + std::hash::Hash + std::fmt::Debug + Ord> NodeView<Id> {
         let ids = g.nodes();
         // Wires sit under the nodes but are only known after layout.
         let wires_slot = ui.painter().add(Shape::Noop);
-        let laid::Drawn { laid, actions, delete, dragged, dropped, edit: drawn } = laid::draw_nodes(ui, g, &ids, self.wiring.in_hand(), keys.stretch, &|id| self.glide.offset(id));
+        self.selected.retain(|id| ids.contains(id));
+        let selected = &self.selected;
+        let laid::Drawn { laid, actions, delete, dragged, dropped, drag_delta, clicked, edit: drawn } =
+            laid::draw_nodes(ui, g, &ids, self.wiring.in_hand(), keys.stretch, &|id| self.glide.offset(id), &|id| selected.contains(id));
         if dragged.is_some() {
             self.glide.stop(); // (a hand on a node: everything where it is)
         }
+        self.select(g, &ids, &laid, clicked, dragged, drag_delta, pointer, ui.input(|i| i.modifiers.shift), edit);
         self.heights = ids.iter().enumerate().map(|(i, id)| (id.clone(), laid.rect(i).height())).filter(|(_, h)| h.is_finite() && *h > 0.0).collect();
         *edit |= drawn;
 
@@ -319,12 +363,14 @@ impl<Id: Clone + Eq + std::hash::Hash + std::fmt::Debug + Ord> NodeView<Id> {
         if keys.grab {
             edit.changed |= self.wiring.grab(g, &ids, &laid, pointer);
         }
-        // A node dropped on a wire joins it; while it hovers, that wire lights up.
-        if let Some((node, wire)) = dropped.and_then(|i| Some((i, splice::target(g, &ids, &laid, i)?))) {
+        // A node dropped on a wire joins it; while it hovers, that wire
+        // lights up. (One node alone: a selection moves as it is.)
+        let alone = self.selected.len() <= 1;
+        if let Some((node, wire)) = dropped.filter(|_| alone).and_then(|i| Some((i, splice::target(g, &ids, &laid, i)?))) {
             let e = g.edges()[wire].clone();
             edit.changed |= splice::splice(g, &ids[node], &e);
         }
-        let joining = dragged.and_then(|i| splice::target(g, &ids, &laid, i));
+        let joining = dragged.filter(|_| alone).and_then(|i| splice::target(g, &ids, &laid, i));
         let courting = self.courting(g, &ids, &laid, dragged, pointer);
         if keys.shift {
             edit.changed |= magnet::wire(g, &courting);
@@ -350,8 +396,12 @@ impl<Id: Clone + Eq + std::hash::Hash + std::fmt::Debug + Ord> NodeView<Id> {
         shapes.extend(preview);
         ui.painter().set(wires_slot, Shape::Vec(shapes));
 
-        // The cutter's trail goes over everything.
+        // The selection box, and the cutter's trail, go over everything.
         let scale = self.view.scale();
+        if let (Some((corner, _)), Some(p)) = (&self.marquee, pointer) {
+            let r = Rect::from_two_pos(*corner, p);
+            ui.painter().rect(r, 2.0, hot.gamma_multiply(0.08), egui::Stroke::new(1.0 / scale, hot), egui::StrokeKind::Inside);
+        }
         let cut = ui.visuals().error_fg_color;
         if let Some(cutter) = self.view.cutter() {
             ui.painter().add(cutter.trail(scale, cut));
@@ -364,6 +414,44 @@ impl<Id: Clone + Eq + std::hash::Hash + std::fmt::Debug + Ord> NodeView<Id> {
             edit.changed = true;
         }
         laid.bounds
+    }
+
+    /// This frame's selecting: a click on a node selects it (shift: in or
+    /// out), dragging an unselected node selects it, and the rest of a
+    /// selection follows the node dragged. A box select in progress
+    /// selects what it touches.
+    #[allow(clippy::too_many_arguments)]
+    fn select<G: Graph<Id = Id>>(&mut self, g: &mut G, ids: &[Id], laid: &laid::Laid<Id>, clicked: Option<usize>, dragged: Option<usize>, delta: Vec2, pointer: Option<Pos2>, shift: bool, edit: &mut Edit) {
+        if let Some(i) = clicked {
+            let id = &ids[i];
+            if !shift {
+                self.selected.clear();
+                self.selected.insert(id.clone());
+            } else if !self.selected.remove(id) {
+                self.selected.insert(id.clone());
+            }
+        }
+        if let Some(i) = dragged {
+            let id = &ids[i];
+            if !self.selected.contains(id) {
+                if !shift {
+                    self.selected.clear();
+                }
+                self.selected.insert(id.clone());
+            }
+            if delta != Vec2::ZERO {
+                for other in self.selected.iter().filter(|o| *o != id) {
+                    g.set_pos(other, g.pos(other) + delta);
+                    edit.moved = true;
+                }
+            }
+        }
+        if let (Some((corner, base)), Some(p)) = (&self.marquee, pointer) {
+            let r = Rect::from_two_pos(*corner, p);
+            let mut sel = base.clone();
+            sel.extend(ids.iter().enumerate().filter(|&(i, _)| laid.rect(i).intersects(r)).map(|(_, id)| id.clone()));
+            self.selected = sel;
+        }
     }
 
     /// The pairs courting this frame (`magnet`). The node in hand is the

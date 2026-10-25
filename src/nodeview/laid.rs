@@ -38,6 +38,10 @@ pub struct Drawn<Id> {
     /// ended this frame.
     pub dragged: Option<usize>,
     pub dropped: Option<usize>,
+    /// How far the dragged node moved this frame.
+    pub drag_delta: egui::Vec2,
+    /// Index of a node clicked this frame.
+    pub clicked: Option<usize>,
     pub edit: Edit,
 }
 
@@ -80,8 +84,8 @@ impl<Id: Clone + Eq + std::hash::Hash> Laid<Id> {
 /// Draw every node. Wider nodes go later so their bodies sit over their
 /// neighbours, and corner dots last of all. `hold_still`: E is held, so
 /// nodes are stretched rather than moved. `offset`: where a tidy's glide
-/// has each node, against where it is.
-pub fn draw_nodes<G: Graph>(ui: &mut Ui, g: &mut G, ids: &[G::Id], wire_in_hand: bool, hold_still: bool, offset: &dyn Fn(&G::Id) -> egui::Vec2) -> Drawn<G::Id> {
+/// has each node, against where it is. `selected`: drawn outlined.
+pub fn draw_nodes<G: Graph>(ui: &mut Ui, g: &mut G, ids: &[G::Id], wire_in_hand: bool, hold_still: bool, offset: &dyn Fn(&G::Id) -> egui::Vec2, selected: &dyn Fn(&G::Id) -> bool) -> Drawn<G::Id> {
     let edges = g.edges();
     let wired: HashSet<(G::Id, String)> = edges.iter().map(|e| (e.to.clone(), e.to_port.clone())).collect();
     let is_dot = |i: usize| g.is_dot(&ids[i]);
@@ -107,6 +111,8 @@ pub fn draw_nodes<G: Graph>(ui: &mut Ui, g: &mut G, ids: &[G::Id], wire_in_hand:
         delete: None,
         dragged: None,
         dropped: None,
+        drag_delta: egui::Vec2::ZERO,
+        clicked: None,
         edit: Edit::default(),
     };
     for i in drawn.laid.order.clone() {
@@ -115,9 +121,10 @@ pub fn draw_nodes<G: Graph>(ui: &mut Ui, g: &mut G, ids: &[G::Id], wire_in_hand:
         let off = offset(id);
         let pos = g.pos(id);
         g.set_pos(id, pos + off);
-        let look = Look { wired: &wired, wire_in_hand, hold_still };
+        let sel = selected(id);
+        let look = Look { wired: &wired, wire_in_hand, hold_still, selected: sel };
         let out = match dot_colors.get(id) {
-            Some(&color) => dot::show(ui, g, id, color, wire_in_hand, hold_still),
+            Some(&color) => dot::show(ui, g, id, color, wire_in_hand, hold_still, sel),
             None => node::show(ui, g, id, &look),
         };
         let pos = g.pos(id);
@@ -130,6 +137,10 @@ pub fn draw_nodes<G: Graph>(ui: &mut Ui, g: &mut G, ids: &[G::Id], wire_in_hand:
         }
         if out.dragging {
             drawn.dragged = Some(i);
+            drawn.drag_delta = out.drag_delta;
+        }
+        if out.clicked {
+            drawn.clicked = Some(i);
         }
         if out.dropped {
             drawn.dropped = Some(i);

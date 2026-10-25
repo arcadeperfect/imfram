@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use egui::{pos2, vec2, Align2, FontId, Frame, Margin, PointerButton, Pos2, Rect, Sense, Stroke, Ui, UiBuilder};
+use egui::{pos2, vec2, Align2, FontId, Frame, Margin, PointerButton, Pos2, Rect, Sense, Stroke, Ui, UiBuilder, Vec2};
 
 use super::graph::{Body, Graph, Port};
 use super::style::{PAD, PORT_HIT, PORT_LABEL_H, PORT_R, ROW_H};
@@ -24,8 +24,12 @@ pub struct NodeOut<Id> {
     pub moved: bool,
     /// Its delete button was clicked.
     pub delete: bool,
-    /// It is being dragged by its body; and the frame that drag ends.
+    /// It was clicked (selection).
+    pub clicked: bool,
+    /// It is being dragged by its body (by `drag_delta` this frame); and
+    /// the frame that drag ends.
     pub dragging: bool,
+    pub drag_delta: Vec2,
     pub dropped: bool,
     /// Each port: key, centre (canvas space) and this frame's interaction.
     pub ports: Vec<(PortKey<Id>, Pos2, egui::Response)>,
@@ -38,6 +42,8 @@ pub struct Look<'a, Id> {
     pub wire_in_hand: bool,
     /// E is held: nodes are being stretched, not moved.
     pub hold_still: bool,
+    /// The node is selected: drawn with a thick accent outline.
+    pub selected: bool,
 }
 
 /// Port labels are skipped when there is nothing to tell apart.
@@ -51,14 +57,18 @@ pub fn show_output_labels(outs: &[Port]) -> bool {
 
 /// Draw `id` and its body.
 pub fn show<G: Graph>(ui: &mut Ui, g: &mut G, id: &G::Id, look: &Look<G::Id>) -> NodeOut<G::Id> {
-    let mut out = NodeOut { rect: Rect::NOTHING, body: Body::default(), moved: false, delete: false, dragging: false, dropped: false, ports: Vec::new() };
+    let mut out = NodeOut { rect: Rect::NOTHING, body: Body::default(), moved: false, delete: false, clicked: false, dragging: false, drag_delta: Vec2::ZERO, dropped: false, ports: Vec::new() };
     let origin = g.pos(id);
     let is_sink = g.is_sink(id);
     let visuals = ui.visuals().clone();
     let hot = visuals.selection.stroke.color;
     let frame = Frame::new()
         .fill(visuals.window_fill)
-        .stroke(Stroke::new(1.0, if is_sink { hot } else { visuals.window_stroke.color }))
+        .stroke(match (look.selected, is_sink) {
+            (true, _) => Stroke::new(2.5, hot),
+            (false, true) => Stroke::new(1.0, hot),
+            (false, false) => Stroke::new(1.0, visuals.window_stroke.color),
+        })
         .corner_radius(6.0)
         .inner_margin(Margin::same(PAD as i8));
 
@@ -84,7 +94,9 @@ pub fn show<G: Graph>(ui: &mut Ui, g: &mut G, id: &G::Id, look: &Look<G::Id>) ->
                 g.set_pos(id, g.pos(id) + body.drag_delta());
                 out.moved = true;
                 out.dragging = true;
+                out.drag_delta = body.drag_delta();
             }
+            out.clicked = body.clicked();
             out.dropped = body.drag_stopped_by(PointerButton::Primary);
             frame
                 .show(ui, |ui| {

@@ -76,7 +76,7 @@ impl Toy {
                 let list = self.list_mut(*parent);
                 list.insert((*index).min(list.len()), *id);
             }
-            Event::Select(_) | Event::Activate(_) | Event::Check(..) => {}
+            Event::Select(_) | Event::Activate(_) | Event::Check(..) | Event::Button(_) => {}
         }
     }
 }

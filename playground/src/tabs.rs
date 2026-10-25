@@ -410,16 +410,17 @@ impl Playground {
 
     fn nodes(&mut self, ui: &mut Ui) {
         let typing = ui.ctx().text_edit_focused();
-        let (tab, grab, stretch, shift, tidy) = ui.input(|i| {
+        let (tab, grab, stretch, shift, tidy, delete) = ui.input(|i| {
             (
                 i.key_pressed(egui::Key::Tab) && !typing,
                 i.key_pressed(egui::Key::G) && !typing,
                 i.key_down(egui::Key::E) && !typing,
                 i.modifiers.shift_only(),
                 i.key_pressed(egui::Key::T) && !typing,
+                (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) && !typing,
             )
         });
-        let input = nodeview::Input { presses: &self.gestures.presses, releases: &self.gestures.releases, tab, grab, stretch, shift, tidy };
+        let input = nodeview::Input { presses: &self.gestures.presses, releases: &self.gestures.releases, tab, grab, stretch, shift, tidy, delete };
         let edit = self.nodes_view.show(ui, &mut self.graph, &input);
         if edit.changed || edit.moved {
             self.last_edit = edit;

@@ -67,6 +67,17 @@ pub trait Panels<T: Tab> {
     fn tabs_in_bar(&self) -> bool {
         false
     }
+    /// A key that shows the panel under the pointer alone in its window,
+    /// and puts the layout back when pressed again (wobble's Q). None: no
+    /// such key. Not while text is being typed.
+    fn solo_key(&self) -> Option<egui::Key> {
+        None
+    }
+    /// Whether the solo key may act over this tab (a game view that takes
+    /// the same key for itself says no).
+    fn may_solo(&self, _tab: &T) -> bool {
+        true
+    }
     /// The fill of the tab on show in each leaf (its text goes dark or
     /// light to read on it). None: the theme's.
     fn tab_colour(&self) -> Option<Color32> {
@@ -240,6 +251,26 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         }
     }
 
+    /// `Panels::solo_key` pressed with the pointer at `ptr`: the leaf under
+    /// it shown alone, or (one already is) the layout put back.
+    fn solo_key(&mut self, ctx: &egui::Context, ptr: Option<Pos2>) {
+        let Some(key) = self.panels.solo_key() else { return };
+        if ctx.egui_wants_keyboard_input() || !ctx.input(|i| i.key_pressed(key) && i.modifiers.is_none()) {
+            return;
+        }
+        if self.anim.solo.is_some() {
+            self.anim.solo = None;
+            ctx.request_repaint();
+            return;
+        }
+        let Some(p) = ptr else { return };
+        let Some(leaf) = self.anim.rects.iter().find(|(_, r)| r.contains(p)).map(|(l, _)| *l) else { return };
+        if self.tree.active(leaf).is_some_and(|t| self.panels.may_solo(&t)) {
+            self.anim.solo = Some(leaf);
+            ctx.request_repaint();
+        }
+    }
+
     fn dock(&mut self, ui: &mut Ui, area: Rect) {
         let ctx = ui.ctx().clone();
         let (ptr, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.primary_down()));
@@ -292,6 +323,11 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         }
         self.dragged = mine;
         self.dragged_group = mine.is_some() && self.anim.group;
+
+        // The solo key: the leaf under the pointer alone, or back again.
+        if drag.is_none() {
+            self.solo_key(&ctx, ptr);
+        }
 
         // Where every leaf is heading, and the glide toward it. A leaf
         // shown alone takes the whole area; the rest fold away.
@@ -755,4 +791,98 @@ pub fn drop_at(layout: &super::tree::Layout, area: Rect, p: Pos2, from: Option<L
         return Some(Drop::Leaf(id, Zone::Side(s)));
     }
     Some(Drop::Leaf(id, Zone::Center))
+}
+
+#[cfg(test)]
+mod solo_tests {
+    use super::*;
+    use crate::dock::tree::Side;
+    use crate::dock::{Role, Tab};
+    use crate::shell::UiApp;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+    enum P {
+        Left,
+        Game,
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+    struct W;
+    impl Role for W {
+        fn title(self) -> &'static str {
+            "w"
+        }
+        fn size(self) -> (u32, u32) {
+            (400, 300)
+        }
+        fn detached() -> Self {
+            W
+        }
+    }
+    impl Tab for P {
+        type Role = W;
+        fn all() -> &'static [Self] {
+            &[P::Left, P::Game]
+        }
+        fn title(self) -> &'static str {
+            if self == P::Left { "left" } else { "game" }
+        }
+        fn home(self) -> W {
+            W
+        }
+    }
+
+    struct Two;
+    impl Panels<P> for Two {
+        fn tab(&mut self, ui: &mut Ui, tab: P) {
+            ui.label(tab.title());
+        }
+        fn solo_key(&self) -> Option<egui::Key> {
+            Some(egui::Key::Q)
+        }
+        fn may_solo(&self, tab: &P) -> bool {
+            *tab != P::Game
+        }
+    }
+
+    /// One frame of a window holding P::Left | P::Game, the pointer at `at`.
+    fn frame(ctx: &egui::Context, tree: &mut Tree<P>, anim: &mut Anim<P>, at: Pos2, q: bool) {
+        let mut asks = Vec::new();
+        let mut panels = Two;
+        let mut events = vec![egui::Event::PointerMoved(at)];
+        if q {
+            events.push(egui::Event::Key { key: egui::Key::Q, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+        }
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0))), events, ..Default::default() };
+        let mut app = DockApp {
+            tree,
+            anim,
+            here: 0,
+            others: Vec::new(),
+            open: vec![P::Left, P::Game],
+            asks: &mut asks,
+            panels: &mut panels,
+            dragged: None,
+            dragged_group: false,
+            dropping: None,
+            drop_here: None,
+        };
+        crate::snapshot::discard(ctx.run_ui(input, |ui| app.ui(ui)));
+    }
+
+    #[test]
+    fn the_solo_key_shows_the_panel_under_the_pointer_alone_and_again_puts_it_back() {
+        let ctx = egui::Context::default();
+        let mut tree = Tree::new(vec![P::Left]);
+        tree.split(Side::Right, 0.5, vec![P::Game]);
+        let mut anim = Anim::default();
+        let (left, right) = (pos2(100.0, 150.0), pos2(300.0, 150.0));
+        frame(&ctx, &mut tree, &mut anim, left, false);
+        frame(&ctx, &mut tree, &mut anim, left, true);
+        assert_eq!(anim.solo, tree.find(P::Left), "Q over a panel: it alone");
+        frame(&ctx, &mut tree, &mut anim, right, true);
+        assert_eq!(anim.solo, None, "Q again, anywhere: back");
+        frame(&ctx, &mut tree, &mut anim, right, true);
+        assert_eq!(anim.solo, None, "a panel that keeps Q for itself is never soloed");
+    }
 }

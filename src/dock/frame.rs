@@ -59,6 +59,13 @@ pub trait Panels<T: Tab> {
     fn tab_bars(&self) -> bool {
         true
     }
+    /// Every tab of the window in its top bar, right of "panels", always
+    /// in the same place; the leaves get no bar and no patch. A tab's chip
+    /// drags it, a click shows it in its leaf, hover lights its leaf.
+    /// Needs the top bar (`bar_shown`); takes over from `tab_bars`.
+    fn tabs_in_bar(&self) -> bool {
+        false
+    }
 }
 
 /// What a compact leaf hands its tab to size the patch (`grip`): the
@@ -142,6 +149,8 @@ pub struct DockApp<'b, T: Tab, P: Panels<T>> {
     pub dropping: Option<(T, Pos2)>,
     /// Where `dropping` would land (read by the dock after).
     pub drop_here: Option<Drop>,
+    /// The leaf whose tab is hovered in the top bar (lit as it is drawn).
+    pub lit: Option<LeafId>,
 }
 
 impl<T: Tab, P: Panels<T>> UiApp for DockApp<'_, T, P> {
@@ -159,6 +168,9 @@ impl<T: Tab, P: Panels<T>> UiApp for DockApp<'_, T, P> {
                     ui.menu_button("panels", |ui| self.panels_menu(ui)).response.on_hover_text(
                         "every panel: open or close it; drag a tab to move it, right-click it to detach it or move it to another window",
                     );
+                    if self.panels.tabs_in_bar() {
+                        self.bar_tabs(ui);
+                    }
                 });
             });
         }
@@ -170,6 +182,37 @@ impl<T: Tab, P: Panels<T>> UiApp for DockApp<'_, T, P> {
 }
 
 impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
+    /// The window's tabs along the top bar (`Panels::tabs_in_bar`): leaf by
+    /// leaf, a gap between leaves; each shown one lit.
+    fn bar_tabs(&mut self, ui: &mut Ui) {
+        let drag = self.anim.drag;
+        let mut lit = None;
+        let mut set_active = None;
+        let leaves: Vec<(LeafId, Vec<T>, usize)> = self.tree.leaves().into_iter().map(|(l, t, a)| (l, t.to_vec(), a)).collect();
+        for (n, (leaf, tabs, active)) in leaves.into_iter().enumerate() {
+            if n > 0 {
+                ui.add_space(10.0);
+            }
+            for (i, tab) in tabs.iter().copied().enumerate() {
+                let on = i == active;
+                let text = egui::RichText::new(tab.title());
+                let text = if drag == Some(tab) { text.weak() } else { text };
+                let resp = ui.add(egui::Button::selectable(on, text).sense(Sense::click_and_drag()));
+                ui.ctx().data_mut(|d| d.insert_temp(super::viewer::tab_rect_id(tab), resp.rect));
+                if resp.hovered() || resp.dragged() {
+                    lit = Some(leaf);
+                }
+                if self.tab_handle(resp, tab) {
+                    set_active = Some(tab);
+                }
+            }
+        }
+        if let Some(t) = set_active {
+            self.tree.set_active(t);
+        }
+        self.lit = lit;
+    }
+
     /// The "panels" menu: each tab, ticked if open; ticking opens it (in
     /// its home window), unticking closes it.
     fn panels_menu(&mut self, ui: &mut Ui) {
@@ -197,7 +240,7 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
             (None, Some((t, p))) => (Some(t), Some(p)),
             _ => (None, None),
         };
-        let bar_h = if self.panels.tab_bars() { BAR_H } else { 0.0 };
+        let bar_h = if self.panels.tab_bars() && !(self.panels.tabs_in_bar() && self.panels.bar_shown()) { BAR_H } else { 0.0 };
         let strip_h = |tabs: &[T]| strip_height(tabs, bar_h);
         let real = self.tree.layout_fixed(area, GAP, &strip_h);
         let inside = at.is_some_and(|p| area.contains(p));
@@ -354,7 +397,8 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
     fn leaf(&mut self, ui: &mut Ui, id: LeafId, rect: Rect, drag: Option<T>, ghost_tab: Option<T>) {
         let Some((_, tabs, active)) = self.tree.leaves().into_iter().find(|(l, ..)| *l == id) else { return };
         let tabs: Vec<T> = tabs.to_vec();
-        let bars = self.panels.tab_bars();
+        let in_bar = self.panels.tabs_in_bar() && self.panels.bar_shown();
+        let bars = self.panels.tab_bars() && !in_bar;
         let bar_h = if bars { BAR_H } else { 0.0 };
         let (bar, body) = (Rect::from_min_size(rect.min, vec2(rect.width(), bar_h)), Rect::from_min_max(pos2(rect.min.x, rect.min.y + bar_h), rect.max));
         let vis = ui.visuals().clone();
@@ -428,7 +472,7 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         let inner = if clear { body } else { body.shrink2(vec2(4.0, 2.0)) };
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).id_salt(("dock body", id)));
         child.set_clip_rect(inner);
-        if !bars {
+        if !bars && !in_bar {
             let titles: Vec<&'static str> = tabs.iter().map(|t| t.title()).collect();
             ui.ctx().data_mut(|d| {
                 d.insert_temp(grip_spec_id(), GripSpec(titles));
@@ -443,7 +487,11 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         } else {
             self.panels.tab(&mut child, tab);
         }
-        if !bars {
+        if self.lit == Some(id) {
+            let c = vis.selection.stroke.color;
+            ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.5, c), egui::StrokeKind::Inside);
+        }
+        if !bars && !in_bar {
             let placed = ui.ctx().data_mut(|d| {
                 d.remove::<GripSpec>(grip_spec_id());
                 let r = d.get_temp::<Rect>(grip_rect_id());

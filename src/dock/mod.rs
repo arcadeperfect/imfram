@@ -433,7 +433,7 @@ impl<T: Tab> Docks<T> {
         let Docks { hosts, asks, .. } = self;
         let Host { win, tree, anim, .. } = &mut hosts[i];
         let Some(win) = win.own() else { return None };
-        let mut app = DockApp { tree, anim, here: i, others, open, asks, panels, dragged: None, dropping, drop_here: None };
+        let mut app = DockApp { tree, anim, here: i, others, open, asks, panels, dragged: None, dropping, drop_here: None, lit: None };
         let tex = match offscreen {
             Some(events) => {
                 win.inject(events);
@@ -458,7 +458,7 @@ impl<T: Tab> Docks<T> {
         let dropping = self.dropping_into(i);
         let Docks { hosts, asks, .. } = self;
         let Host { tree, anim, .. } = &mut hosts[i];
-        let mut app = DockApp { tree, anim, here: i, others, open, asks, panels, dragged: None, dropping, drop_here: None };
+        let mut app = DockApp { tree, anim, here: i, others, open, asks, panels, dragged: None, dropping, drop_here: None, lit: None };
         crate::shell::UiApp::ui(&mut app, ui);
         let dragged = app.dragged;
         let drop_here = app.drop_here;

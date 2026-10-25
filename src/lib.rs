@@ -42,6 +42,7 @@
 
 pub mod bg;
 pub mod canvas;
+pub mod gallery;
 pub mod dialog;
 pub mod imageview;
 pub mod keymap;

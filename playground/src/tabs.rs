@@ -3,6 +3,7 @@
 
 use egui::Ui;
 use imfram::colorpicker::{self, PickSpec};
+use imfram::composer::{self, Composer};
 use imfram::dock::{self, Panels};
 use imfram::filebrowser::{Action, Browser};
 use imfram::fonts::Fonts;
@@ -37,6 +38,7 @@ pub enum Tab {
     Toasts,
     Theme,
     Keymap,
+    Composer,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
@@ -70,6 +72,7 @@ impl dock::Tab for Tab {
             Tab::Toasts,
             Tab::Theme,
             Tab::Keymap,
+            Tab::Composer,
         ]
     }
     fn title(self) -> &'static str {
@@ -92,6 +95,7 @@ impl dock::Tab for Tab {
             Tab::Toasts => "Toasts",
             Tab::Theme => "Theme",
             Tab::Keymap => "Keymap",
+            Tab::Composer => "Composer",
         }
     }
     fn help(self) -> &'static str {
@@ -114,11 +118,12 @@ impl dock::Tab for Tab {
             Tab::Toasts => "toasts and the status bar",
             Tab::Theme => "the theme engine: slots, links, the colours window",
             Tab::Keymap => "the key map engine: bindings, conflicts, rebinding",
+            Tab::Composer => "controls from Widgets and Props, gathered: hold Alt and drag one in, or pick and click",
         }
     }
     fn home(self) -> Role {
         match self {
-            Tab::Widgets | Tab::Colour | Tab::Text | Tab::Files => Role::Main,
+            Tab::Widgets | Tab::Colour | Tab::Text | Tab::Files | Tab::Composer => Role::Main,
             Tab::Canvas | Tab::Nodes | Tab::Keys => Role::Side,
             Tab::Nothing => Role::Spare,
             _ => Role::Views,
@@ -191,6 +196,8 @@ pub struct Playground {
     pub nodes_view: NodeView<u64>,
     pub gestures: GestureFilter,
     pub last_edit: nodeview::Edit,
+    /// The Composer tab's rows (kept for the run only).
+    pub composer: Composer,
 }
 
 impl Default for Playground {
@@ -229,6 +236,7 @@ impl Default for Playground {
             nodes_view: NodeView::default(),
             gestures: GestureFilter::default(),
             last_edit: Default::default(),
+            composer: Composer::default(),
         }
     }
 }
@@ -270,7 +278,7 @@ impl Panels<Tab> for Playground {
 
     fn tab(&mut self, ui: &mut Ui, tab: Tab) {
         match tab {
-            Tab::Widgets => self.widgets(ui),
+            Tab::Widgets => composer::scope(ui, "Widgets", |ui| self.widgets(ui)),
             Tab::Colour => self.colour(ui),
             Tab::Text => self.text(ui),
             Tab::Files => self.files_tab(ui),
@@ -280,7 +288,7 @@ impl Panels<Tab> for Playground {
             Tab::Nothing => {
                 ui.centered_and_justified(|ui| ui.weak("nothing here"));
             }
-            Tab::Props => crate::views::props::ui(ui, &mut self.views.props),
+            Tab::Props => composer::scope(ui, "Props", |ui| crate::views::props::ui(ui, &mut self.views.props)),
             Tab::Outliner => crate::views::outliner::ui(ui, &mut self.views.outliner),
             Tab::Table => crate::views::table::ui(ui, &mut self.views.table),
             Tab::Timeline => crate::views::timeline::ui(ui, &mut self.views.timeline),
@@ -290,6 +298,7 @@ impl Panels<Tab> for Playground {
             Tab::Toasts => crate::views::toast::ui(ui, &mut self.views.toast),
             Tab::Theme => crate::views::theme::ui(ui, &mut self.views.theme),
             Tab::Keymap => crate::views::keymap::ui(ui, &mut self.views.keymap),
+            Tab::Composer => self.composer(ui),
         }
     }
 
@@ -300,13 +309,24 @@ impl Panels<Tab> for Playground {
 
     fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
         match tab {
-            Tab::Widgets | Tab::Colour | Tab::Text | Tab::Props | Tab::Dialogs | Tab::Toasts => [false, true],
+            Tab::Widgets | Tab::Colour | Tab::Text | Tab::Props | Tab::Dialogs | Tab::Toasts | Tab::Composer => [false, true],
             _ => [false, false],
         }
     }
 }
 
 impl Playground {
+    /// The composer's sources: the tabs whose controls it can hold, each
+    /// under the scope its own tab draws it in.
+    fn composer(&mut self, ui: &mut Ui) {
+        let mut c = std::mem::take(&mut self.composer);
+        c.show(ui, |ui| {
+            composer::scope(ui, "Widgets", |ui| self.widgets(ui));
+            composer::scope(ui, "Props", |ui| crate::views::props::ui(ui, &mut self.views.props));
+        });
+        self.composer = c;
+    }
+
     fn widgets(&mut self, ui: &mut Ui) {
         group(ui, "sliders", "hold Z X C while dragging to slow, V B N to speed", Start::Open, |ui| {
             widgets::slider(ui, &mut self.a, (0.0, 1.0), "amount", false, "a plain 0..1");

@@ -39,6 +39,7 @@ cargo run -p playground -- --shot DIR   # each window once to DIR/<role>.png
 | `canvas`      | new    | a canvas for anything placed in 2D: camera with Blender hands and a framing glide, a decade grid, a `Scene` trait an app's document implements, and `Board` with vector shapes (béziers, concave fills), pictures, video clips (`FrameSource`) and notes; select, box, drag, G/R/S with axis lock and snapping, corner and rotate handles, duplicate, restack, edit in place, file drops |
 | `nodeview`    | graav  | a node canvas for any graph (`Graph` trait): wires, G-carry, ctrl-cut, magnet, splice, corner dots, E-stretch, Tab search, T tidy with glide |
 | `props`       | new    | the properties sheet: aligned rows, reset dots, key dots        |
+| `composer`    | new    | a panel the user fills at run time: Alt-drag (or pick and click) any slider, switch or props row into it; each row is the real control, re-run from the app's own panel code, saved by key |
 | `outliner`    | new    | a tree view: select, rename, drag to reorder or reparent        |
 | `table`       | new    | sortable, resizable columns over virtual rows                   |
 | `palette`     | new    | a command palette: fuzzy search over actions, recent first      |

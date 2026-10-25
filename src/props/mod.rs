@@ -320,58 +320,64 @@ impl<'a> Sheet<'a> {
         let show_key = self.key_column || key.is_some();
         let (label_w, rgb_spec) = (self.label_w, self.rgb_spec);
         let mut events = Vec::new();
-        let ui = &mut *self.ui;
-        let wid = ui.id().with(("props", id));
-        let row = ui.horizontal(|ui| {
-            let gap = ui.spacing().item_spacing.x;
-            // The key slot is pinned to the row's right edge rather than
-            // flowed after the control, so a control that runs a little
-            // over its width (the house slider's trailing label) cannot
-            // push it out of line.
-            let edge = ui.available_rect_before_wrap();
-            let key_rect = Rect::from_min_size(egui::pos2(edge.right() - KEY_W, edge.top()), vec2(KEY_W, height));
-            // Reset dot: there while the value is away from its default.
-            let (dot_rect, dot) = ui.allocate_exact_size(vec2(DOT_W, height), Sense::click());
-            if let Some(d) = default.as_ref().filter(|d| control.differs(d)) {
-                let c = if dot.hovered() { ui.visuals().widgets.hovered.fg_stroke.color } else { ui.visuals().widgets.inactive.fg_stroke.color };
-                disc(ui.painter(), dot_rect.center(), DOT_R, c);
-                if dot.clicked() {
-                    control.reset(d);
-                    events.push(RowEvent::Reset);
+        // Every row can go in a composer (`crate::composer`), by its label.
+        crate::composer::item(&mut *self.ui, label, |ui| {
+            let wid = ui.id().with(("props", id));
+            let row = ui.horizontal(|ui| {
+                let gap = ui.spacing().item_spacing.x;
+                // The key slot is pinned to the row's right edge rather than
+                // flowed after the control, so a control that runs a little
+                // over its width (the house slider's trailing label) cannot
+                // push it out of line.
+                let edge = ui.available_rect_before_wrap();
+                let key_rect = Rect::from_min_size(egui::pos2(edge.right() - KEY_W, edge.top()), vec2(KEY_W, height));
+                // Reset dot: there while the value is away from its default.
+                let (dot_rect, dot) = ui.allocate_exact_size(vec2(DOT_W, height), Sense::click());
+                if let Some(d) = default.as_ref().filter(|d| control.differs(d)) {
+                    let c = if dot.hovered() { ui.visuals().widgets.hovered.fg_stroke.color } else { ui.visuals().widgets.inactive.fg_stroke.color };
+                    disc(ui.painter(), dot_rect.center(), DOT_R, c);
+                    if dot.clicked() {
+                        control.reset(d);
+                        events.push(RowEvent::Reset);
+                    }
+                    dot.on_hover_text("back to the default");
                 }
-                dot.on_hover_text("back to the default");
-            }
-            // Label: right-aligned, weak, clipped to its column.
-            let (label_rect, _) = ui.allocate_exact_size(vec2(label_w, height), Sense::hover());
-            let font = egui::TextStyle::Body.resolve(ui.style());
-            ui.painter().with_clip_rect(label_rect).text(label_rect.right_center(), Align2::RIGHT_CENTER, label, font, ui.visuals().weak_text_color());
-            // Control: the rest, less the key slot.
-            // (egui adds the gap before the next widget, not after the last:
-            // the room left is short of it.)
-            let key_w = if show_key { KEY_W + gap } else { 0.0 };
-            let cw = (ui.available_width() - gap - key_w).max(MIN_CONTROL);
-            let c = ui.allocate_ui_with_layout(vec2(cw, height), Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.set_min_size(vec2(cw, height));
-                control.show(ui, wid, rgb_spec)
-            });
-            if c.inner {
-                events.push(RowEvent::Changed);
-            }
-            let key_rect = show_key.then(|| {
-                let resp = ui.interact(key_rect, wid.with("key"), Sense::click());
-                ui.allocate_rect(key_rect, Sense::hover());
-                paint_key(ui, key_rect, key.unwrap_or(KeyState::None), resp.hovered());
-                if resp.clicked() {
-                    events.push(RowEvent::ToggleKey);
+                // Label: right-aligned, weak, clipped to its column.
+                let (label_rect, _) = ui.allocate_exact_size(vec2(label_w, height), Sense::hover());
+                let font = egui::TextStyle::Body.resolve(ui.style());
+                ui.painter().with_clip_rect(label_rect).text(label_rect.right_center(), Align2::RIGHT_CENTER, label, font, ui.visuals().weak_text_color());
+                // Control: the rest, less the key slot.
+                // (egui adds the gap before the next widget, not after the last:
+                // the room left is short of it.)
+                let key_w = if show_key { KEY_W + gap } else { 0.0 };
+                let cw = (ui.available_width() - gap - key_w).max(MIN_CONTROL);
+                let c = ui.allocate_ui_with_layout(vec2(cw, height), Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.set_min_size(vec2(cw, height));
+                    control.show(ui, wid, rgb_spec)
+                });
+                if c.inner {
+                    events.push(RowEvent::Changed);
                 }
-                key_tip(&resp, key.unwrap_or(KeyState::None));
-                key_rect
+                let key_rect = show_key.then(|| {
+                    let resp = ui.interact(key_rect, wid.with("key"), Sense::click());
+                    ui.allocate_rect(key_rect, Sense::hover());
+                    paint_key(ui, key_rect, key.unwrap_or(KeyState::None), resp.hovered());
+                    if resp.clicked() {
+                        events.push(RowEvent::ToggleKey);
+                    }
+                    key_tip(&resp, key.unwrap_or(KeyState::None));
+                    key_rect
+                });
+                (dot_rect, label_rect, c.response.rect, key_rect)
             });
-            (dot_rect, label_rect, c.response.rect, key_rect)
+            tip::tip_row(ui, &row.response, tip_text);
+            let (dot, label, control, key) = row.inner;
+            // A composer's hidden run of the page must not move where the
+            // page's own row is remembered (its slot copy is not the row).
+            if !crate::composer::harvesting(ui) {
+                remember(ui, id, RowRects { row: row.response.rect, dot, label, control, key });
+            }
         });
-        tip::tip_row(ui, &row.response, tip_text);
-        let (dot, label, control, key) = row.inner;
-        remember(ui, id, RowRects { row: row.response.rect, dot, label, control, key });
         self.events.extend(events.into_iter().map(|e| (id, e)));
     }
 }

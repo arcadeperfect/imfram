@@ -18,6 +18,7 @@
 //! | `textedit`    | new    | a line, a paragraph, or code: gutter, tabs, a small lexer       |
 //! | `history`     | graav  | snapshot undo that settles an edit burst into one step        |
 //! | `props`       | new    | the properties sheet: aligned rows, reset dots, key dots      |
+//! | `composer`    | new    | a panel filled at run time with controls dragged from anywhere |
 //! | `outliner`    | new    | a tree view: select, rename, drag to reorder or reparent      |
 //! | `table`       | new    | a table: sortable, resizable columns, virtual rows            |
 //! | `palette`     | new    | a command palette: fuzzy search over actions, recent first    |
@@ -53,6 +54,7 @@ pub mod theme;
 pub mod timeline;
 pub mod toast;
 pub mod colorpicker;
+pub mod composer;
 pub mod eyedrop;
 pub mod filedialog;
 pub mod fonts;

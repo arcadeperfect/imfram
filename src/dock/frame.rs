@@ -81,8 +81,8 @@ pub trait Panels<T: Tab> {
     /// Whether a tab keeps the keyboard to itself while the pointer is
     /// over it (a game view that reads its keys off the window, not off
     /// egui): key presses and typed text never reach egui there, so the
-    /// other panels' hotkeys and the solo key do not fire over it. Not
-    /// while a text field has focus: it keeps its typing.
+    /// other panels' hotkeys do not fire over it; the solo key only if
+    /// `may_solo`. Not while a text field has focus: it keeps its typing.
     fn owns_keys(&self, _tab: &T) -> bool {
         false
     }
@@ -155,11 +155,13 @@ pub(super) fn keys_to_owner<T: Tab, P: Panels<T>>(tree: &Tree<T>, anim: &Anim<T>
     });
     let Some(p) = moved.unwrap_or_else(|| ctx.input(|i| i.pointer.latest_pos())) else { return };
     let Some(leaf) = anim.rects.iter().find(|(_, r)| r.contains(p)).map(|(l, _)| *l) else { return };
-    if !tree.active(leaf).is_some_and(|t| panels.owns_keys(&t)) {
-        return;
-    }
-    raw.events.retain(|e| {
-        !matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::Text(_) | egui::Event::Copy | egui::Event::Cut | egui::Event::Paste(_))
+    let Some(tab) = tree.active(leaf).filter(|t| panels.owns_keys(t)) else { return };
+    // (The solo key still acts over it, if it may solo.)
+    let solo = panels.solo_key().filter(|_| panels.may_solo(&tab));
+    raw.events.retain(|e| match e {
+        egui::Event::Key { key, pressed: true, modifiers, .. } => Some(*key) == solo && modifiers.is_none(),
+        egui::Event::Text(_) | egui::Event::Copy | egui::Event::Cut | egui::Event::Paste(_) => false,
+        _ => true,
     });
 }
 
@@ -936,5 +938,28 @@ mod solo_tests {
         let mut over_left = at(pos2(100.0, 150.0));
         keys_to_owner(&tree, &anim, &ctx, &mut over_left, &Two);
         assert_eq!(over_left.events.len(), 4, "over another panel: every key is egui's");
+    }
+
+    #[test]
+    fn a_panel_that_owns_its_keys_and_may_solo_still_hands_on_the_solo_key() {
+        struct Soloing;
+        impl Panels<P> for Soloing {
+            fn tab(&mut self, _ui: &mut Ui, _tab: P) {}
+            fn solo_key(&self) -> Option<egui::Key> {
+                Some(egui::Key::Q)
+            }
+            fn owns_keys(&self, tab: &P) -> bool {
+                *tab == P::Game
+            }
+        }
+        let ctx = egui::Context::default();
+        let mut tree = Tree::new(vec![P::Left]);
+        tree.split(Side::Right, 0.5, vec![P::Game]);
+        let mut anim = Anim::default();
+        frame(&ctx, &mut tree, &mut anim, pos2(100.0, 150.0), false);
+        let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
+        let mut raw = egui::RawInput { events: vec![egui::Event::PointerMoved(pos2(300.0, 150.0)), key(egui::Key::Q), key(egui::Key::G)], ..Default::default() };
+        keys_to_owner(&tree, &anim, &ctx, &mut raw, &Soloing);
+        assert_eq!(raw.events, vec![egui::Event::PointerMoved(pos2(300.0, 150.0)), key(egui::Key::Q)], "Q stays, G is the panel's");
     }
 }

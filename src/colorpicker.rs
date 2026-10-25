@@ -237,7 +237,8 @@ impl Geo {
     /// neighbours and one more above the palette.
     fn size(&self, mode: Mode, alpha: bool) -> Vec2 {
         let (body, body_rows) = match mode {
-            Mode::Wheel => (self.disc_d, 1),
+            // The disc row, then saturation and value as lanes.
+            Mode::Wheel => (self.disc_d + 2.0 * self.lane_h, 3),
             _ => (3.0 * self.lane_h, 3),
         };
         let (a, a_rows) = if alpha { (self.lane_h, 1) } else { (0.0, 0) };
@@ -1359,6 +1360,36 @@ fn wheel_ui(ui: &mut Ui, geo: &Geo, id: Id, st: &mut State, spec: &PickSpec, geo
     changed
 }
 
+/// Saturation and value under the disc as lanes, for the hand that wants
+/// one axis at a time: the disc's radius and the strip, laid flat.
+fn wheel_lanes(ui: &mut Ui, geo: &Geo, id: Id, st: &mut State, spec: &PickSpec, geom: &mut Geom) -> bool {
+    let mut changed = false;
+    let cur = st.hsv;
+    for (i, lab) in [(1, "s"), (2, "v")] {
+        let sample = move |k: usize| {
+            let mut c = cur;
+            c[i] = k as f32 / GRAD_N as f32;
+            to_color32(dec3(hsv_to_rgb(c)), spec)
+        };
+        let (ch, track) = lane(
+            ui,
+            geo,
+            id.with(("lane", i)),
+            lab,
+            &mut st.hsv[i],
+            (0.0, 1.0),
+            (0.005, 3),
+            spec,
+            &sample,
+            None,
+            false,
+        );
+        geom.lanes[i] = track;
+        changed |= ch;
+    }
+    changed
+}
+
 // ---------------------------------------------------------------------------
 // The palette
 // ---------------------------------------------------------------------------
@@ -1562,7 +1593,9 @@ pub fn picker_ui(
 
     match view.mode {
         Mode::Wheel => {
-            if wheel_ui(ui, &geo, id.with("wheel"), &mut st, spec, geom) {
+            let mut edited = wheel_ui(ui, &geo, id.with("wheel"), &mut st, spec, geom);
+            edited |= wheel_lanes(ui, &geo, id.with("wheel"), &mut st, spec, geom);
+            if edited {
                 let nv = clamp01(dec3(hsv_to_rgb(st.hsv)));
                 (v[0], v[1], v[2]) = (nv[0], nv[1], nv[2]);
                 st.follow(*v, Some(Mode::Wheel), spec);

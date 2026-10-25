@@ -75,6 +75,17 @@ pub trait Tab: Copy + Eq + Hash + Debug + Serialize + serde::de::DeserializeOwne
     fn pinned(self) -> bool {
         false
     }
+    /// The panel it shows, as `all()` lists it: itself, unless it is a
+    /// copy (`copy`).
+    fn panel(self) -> Self {
+        self
+    }
+    /// The `n`th copy of this panel (0: the panel itself), when the same
+    /// panel may be open in more than one place at once; each copy is a
+    /// tab of its own (its own scroll, its own place).
+    fn copy(self, n: u32) -> Option<Self> {
+        (n == 0).then_some(self)
+    }
 }
 
 /// What a window is for: its title and size. One role is "a window a tab
@@ -199,6 +210,9 @@ pub enum Ask<T> {
     /// Back where it was closed from, or its home; its window shown.
     Open(T),
     Close(T),
+    /// Into the leaf holding the second (a group dragged out: the rest of
+    /// its leaf follows the one that led it).
+    Follow(T, T),
 }
 
 pub struct Docks<T: Tab> {
@@ -210,12 +224,14 @@ pub struct Docks<T: Tab> {
     pub drag: Option<Drag<T>>,
     /// Windows are made hidden and stay so (captures, scripted tests).
     pub headless: bool,
+    /// The drag out (`drag`) carries its tab's whole leaf.
+    pub drag_group: bool,
 }
 
 impl<T: Tab> Docks<T> {
     /// No windows yet: `add` the home windows next.
     pub fn new(app: &'static str, headless: bool) -> Self {
-        Self { app, hosts: Vec::new(), asks: Vec::new(), drag: None, headless }
+        Self { app, hosts: Vec::new(), asks: Vec::new(), drag: None, headless, drag_group: false }
     }
 
     /// A window of `role` holding `dock`, shown. Returns its place among
@@ -316,11 +332,18 @@ impl<T: Tab> Docks<T> {
         }
     }
 
-    /// Draw again the window holding `tab` (its numbers changed).
+    /// Draw again every window showing `tab`'s panel (its numbers changed).
     pub fn repaint(&mut self, tab: T) {
-        if let Some(i) = self.host_of(tab) {
-            self.hosts[i].win.request_repaint();
+        for h in &mut self.hosts {
+            if h.tree.tabs().iter().any(|t| t.panel() == tab.panel()) {
+                h.win.request_repaint();
+            }
         }
+    }
+
+    /// The window holding `tab`, or else any copy of its panel.
+    pub fn host_of_panel(&self, tab: T) -> Option<usize> {
+        self.host_of(tab).or_else(|| self.hosts.iter().position(|h| h.tree.tabs().iter().any(|t| t.panel() == tab.panel())))
     }
 
     /// Show `tab`: opened if it was closed, its window brought up, and it
@@ -331,7 +354,7 @@ impl<T: Tab> Docks<T> {
 
     /// A window's hot key: its window shown or hidden; opened if closed.
     pub fn toggle(&mut self, tab: T) {
-        match self.host_of(tab) {
+        match self.host_of_panel(tab) {
             Some(i) => self.hosts[i].win.toggle_visible(),
             None => self.asks.push(Ask::Open(tab)),
         }
@@ -365,6 +388,17 @@ impl<T: Tab> Docks<T> {
                     }
                 }
                 Ask::Move(..) => {}
+                Ask::Follow(tab, lead) => {
+                    let Some(to) = self.host_of(lead).filter(|_| tab != lead && !tab.pinned()) else { continue };
+                    if self.take(tab) {
+                        let leaf = self.hosts[to].tree.find(lead);
+                        match leaf {
+                            Some(l) => self.hosts[to].tree.insert(tab, Drop::Leaf(l, Zone::Center)),
+                            None => self.hosts[to].tree.push_first(tab),
+                        }
+                        self.hosts[to].tree.set_active(lead);
+                    }
+                }
                 Ask::Detach(tab) | Ask::DetachAt(tab, _) => {
                     let Some(el) = el else { continue };
                     if self.take(tab) {
@@ -419,7 +453,15 @@ impl<T: Tab> Docks<T> {
             }
             if let (true, Some(p)) = (outside, screen) {
                 self.asks.push(drag::drop(d.tab, over, drop, p));
+                // (a group: the rest of its leaf follows)
+                if self.drag_group {
+                    let h = &self.hosts[i].tree;
+                    let leaf = h.find(d.tab);
+                    let rest: Vec<T> = h.leaves().into_iter().find(|(l, ..)| Some(*l) == leaf).map(|(_, tabs, _)| tabs.iter().copied().filter(|t| *t != d.tab && !t.pinned()).collect()).unwrap_or_default();
+                    self.asks.extend(rest.into_iter().map(|t| Ask::Follow(t, d.tab)));
+                }
             }
+            self.drag_group = false;
         }
     }
 
@@ -433,7 +475,7 @@ impl<T: Tab> Docks<T> {
         let Docks { hosts, asks, .. } = self;
         let Host { win, tree, anim, .. } = &mut hosts[i];
         let Some(win) = win.own() else { return None };
-        let mut app = DockApp { tree, anim, here: i, others, open, asks, panels, dragged: None, dropping, drop_here: None, lit: None };
+        let mut app = DockApp { tree, anim, here: i, others, open, asks, panels, dragged: None, dragged_group: false, dropping, drop_here: None };
         let tex = match offscreen {
             Some(events) => {
                 win.inject(events);
@@ -444,9 +486,9 @@ impl<T: Tab> Docks<T> {
                 None
             }
         };
-        let dragged = app.dragged;
+        let (dragged, group) = (app.dragged, app.dragged_group);
         let drop_here = app.drop_here;
-        self.after_frame(i, dragged, drop_here);
+        self.after_frame(i, dragged, group, drop_here);
         tex
     }
 
@@ -458,11 +500,11 @@ impl<T: Tab> Docks<T> {
         let dropping = self.dropping_into(i);
         let Docks { hosts, asks, .. } = self;
         let Host { tree, anim, .. } = &mut hosts[i];
-        let mut app = DockApp { tree, anim, here: i, others, open, asks, panels, dragged: None, dropping, drop_here: None, lit: None };
+        let mut app = DockApp { tree, anim, here: i, others, open, asks, panels, dragged: None, dragged_group: false, dropping, drop_here: None };
         crate::shell::UiApp::ui(&mut app, ui);
-        let dragged = app.dragged;
+        let (dragged, group) = (app.dragged, app.dragged_group);
         let drop_here = app.drop_here;
-        self.after_frame(i, dragged, drop_here);
+        self.after_frame(i, dragged, group, drop_here);
     }
 
     /// Before an external host's egui frame: the panels' claim on the raw
@@ -473,11 +515,14 @@ impl<T: Tab> Docks<T> {
         panels.raw_input(&ctx, raw, &tabs);
     }
 
-    fn after_frame(&mut self, i: usize, dragged: Option<T>, drop_here: Option<Drop>) {
+    fn after_frame(&mut self, i: usize, dragged: Option<T>, group: bool, drop_here: Option<Drop>) {
         if let Some(d) = &mut self.drag {
             if d.over == Some(i) {
                 d.drop = drop_here;
             }
+        }
+        if self.drag.is_none() {
+            self.drag_group = group;
         }
         self.track(i, dragged);
     }
@@ -589,6 +634,8 @@ impl<T: Tab> Docks<T> {
 
     /// Open `tab` (home, if it was closed), its window shown, it in front.
     fn open(&mut self, tab: T) {
+        // (a copy of its panel open somewhere does)
+        let tab = self.hosts.iter().flat_map(|h| h.tree.tabs()).find(|t| *t == tab).or_else(|| self.hosts.iter().flat_map(|h| h.tree.tabs()).find(|t| t.panel() == tab.panel())).unwrap_or(tab);
         if self.host_of(tab).is_none() {
             self.home(tab);
         }

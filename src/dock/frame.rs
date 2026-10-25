@@ -59,10 +59,11 @@ pub trait Panels<T: Tab> {
     fn tab_bars(&self) -> bool {
         true
     }
-    /// Every tab of the window in its top bar, right of "panels", always
-    /// in the same place; the leaves get no bar and no patch. A tab's chip
-    /// drags it, a click shows it in its leaf, hover lights its leaf.
-    /// Needs the top bar (`bar_shown`); takes over from `tab_bars`.
+    /// Each leaf gets a bar of its own: a "panels" menu for that leaf (a
+    /// panel ticked is in this leaf; ticking one adds it here, a copy if
+    /// it is open elsewhere: `Tab::copy`), then the leaf's tabs. The app's
+    /// bar items (`bar`) lead the first leaf's bar, and the window's top
+    /// bar is not drawn. Takes over from `tab_bars`.
     fn tabs_in_bar(&self) -> bool {
         false
     }
@@ -115,11 +116,13 @@ pub struct Anim<T> {
     drag: Option<T>,
     /// A leaf shown alone (the rest folded away).
     pub solo: Option<LeafId>,
+    /// The drag carries the dragged tab's whole leaf (its bar's grip).
+    pub group: bool,
 }
 
 impl<T> Default for Anim<T> {
     fn default() -> Self {
-        Self { rects: HashMap::new(), drag: None, solo: None }
+        Self { rects: HashMap::new(), drag: None, solo: None, group: false }
     }
 }
 
@@ -144,13 +147,13 @@ pub struct DockApp<'b, T: Tab, P: Panels<T>> {
     pub panels: &'b mut P,
     /// A tab this window has in a drag this frame (read by the dock after).
     pub dragged: Option<T>,
+    /// ...and the drag carries its whole leaf.
+    pub dragged_group: bool,
     /// A tab dragged from another window, over this one, the pointer in
     /// this window's points: shown landing here.
     pub dropping: Option<(T, Pos2)>,
     /// Where `dropping` would land (read by the dock after).
     pub drop_here: Option<Drop>,
-    /// The leaf whose tab is hovered in the top bar (lit as it is drawn).
-    pub lit: Option<LeafId>,
 }
 
 impl<T: Tab, P: Panels<T>> UiApp for DockApp<'_, T, P> {
@@ -161,16 +164,13 @@ impl<T: Tab, P: Panels<T>> UiApp for DockApp<'_, T, P> {
 
     fn ui(&mut self, ui: &mut Ui) {
         self.panels.begin(ui);
-        if self.panels.bar_shown() {
+        if self.panels.bar_shown() && !self.panels.tabs_in_bar() {
             egui::Panel::top(Id::new(("dock-bar", self.here))).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     self.panels.bar(ui);
                     ui.menu_button("panels", |ui| self.panels_menu(ui)).response.on_hover_text(
                         "every panel: open or close it; drag a tab to move it, right-click it to detach it or move it to another window",
                     );
-                    if self.panels.tabs_in_bar() {
-                        self.bar_tabs(ui);
-                    }
                 });
             });
         }
@@ -182,35 +182,34 @@ impl<T: Tab, P: Panels<T>> UiApp for DockApp<'_, T, P> {
 }
 
 impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
-    /// The window's tabs along the top bar (`Panels::tabs_in_bar`): leaf by
-    /// leaf, a gap between leaves; each shown one lit.
-    fn bar_tabs(&mut self, ui: &mut Ui) {
-        let drag = self.anim.drag;
-        let mut lit = None;
-        let mut set_active = None;
-        let leaves: Vec<(LeafId, Vec<T>, usize)> = self.tree.leaves().into_iter().map(|(l, t, a)| (l, t.to_vec(), a)).collect();
-        for (n, (leaf, tabs, active)) in leaves.into_iter().enumerate() {
-            if n > 0 {
-                ui.add_space(10.0);
+    /// A leaf's "panels" menu (`Panels::tabs_in_bar`): every panel,
+    /// ticked if it is in this leaf. Ticking adds it here (a copy, if it
+    /// is open elsewhere and may be copied), unticking takes it out.
+    fn leaf_menu(&mut self, ui: &mut Ui, leaf: LeafId, tabs: &[T]) {
+        for &panel in T::all() {
+            let here: Vec<T> = tabs.iter().copied().filter(|t| t.panel() == panel.panel()).collect();
+            let mut on = !here.is_empty();
+            let r = ui.add_enabled(!panel.pinned(), egui::Checkbox::new(&mut on, panel.title())).on_hover_text(panel.help());
+            if !r.changed() {
+                continue;
             }
-            for (i, tab) in tabs.iter().copied().enumerate() {
-                let on = i == active;
-                let text = egui::RichText::new(tab.title());
-                let text = if drag == Some(tab) { text.weak() } else { text };
-                let resp = ui.add(egui::Button::selectable(on, text).sense(Sense::click_and_drag()));
-                ui.ctx().data_mut(|d| d.insert_temp(super::viewer::tab_rect_id(tab), resp.rect));
-                if resp.hovered() || resp.dragged() {
-                    lit = Some(leaf);
+            if on {
+                let taken = |t: T| self.open.contains(&t) || self.tree.find(t).is_some();
+                let fresh = (0..64).filter_map(|n| panel.copy(n)).find(|t| !taken(*t));
+                match fresh {
+                    Some(t) => {
+                        self.tree.insert(t, Drop::Leaf(leaf, Zone::Center));
+                        self.tree.set_active(t);
+                    }
+                    // (Open elsewhere and not one to copy: brought here.)
+                    None => self.asks.push(Ask::Move(panel, self.here, Some(Drop::Leaf(leaf, Zone::Center)))),
                 }
-                if self.tab_handle(resp, tab) {
-                    set_active = Some(tab);
+            } else {
+                for t in here {
+                    self.tree.remove(t);
                 }
             }
         }
-        if let Some(t) = set_active {
-            self.tree.set_active(t);
-        }
-        self.lit = lit;
     }
 
     /// The "panels" menu: each tab, ticked if open; ticking opens it (in
@@ -240,7 +239,7 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
             (None, Some((t, p))) => (Some(t), Some(p)),
             _ => (None, None),
         };
-        let bar_h = if self.panels.tab_bars() && !(self.panels.tabs_in_bar() && self.panels.bar_shown()) { BAR_H } else { 0.0 };
+        let bar_h = if self.panels.tab_bars() || self.panels.tabs_in_bar() { BAR_H } else { 0.0 };
         let strip_h = |tabs: &[T]| strip_height(tabs, bar_h);
         let real = self.tree.layout_fixed(area, GAP, &strip_h);
         let inside = at.is_some_and(|p| area.contains(p));
@@ -262,14 +261,25 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
                 if inside {
                     if let Some(d) = drop {
                         if proposal.is_some() {
+                            // (a group: the rest of its leaf goes with it)
+                            let rest: Vec<T> = if self.anim.group { self.leaf_mates(tab) } else { Vec::new() };
                             self.tree.remove(tab);
                             self.tree.insert(tab, d);
+                            if let Some(leaf) = self.tree.find(tab) {
+                                for t in rest {
+                                    self.tree.remove(t);
+                                    self.tree.insert(t, Drop::Leaf(leaf, Zone::Center));
+                                }
+                            }
+                            self.tree.set_active(tab);
                         }
                     }
                 }
+                self.anim.group = false;
             }
         }
         self.dragged = mine;
+        self.dragged_group = mine.is_some() && self.anim.group;
 
         // Where every leaf is heading, and the glide toward it. A leaf
         // shown alone takes the whole area; the rest fold away.
@@ -350,7 +360,11 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         if let (Some(tab), Some(p)) = (mine, ptr) {
             let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, Id::new("dock drag label")));
             let font = FontId::proportional(13.0);
-            let galley = painter.layout_no_wrap(tab.title().to_string(), font, ui.visuals().strong_text_color());
+            let label = match self.anim.group.then(|| self.leaf_mates(tab).len()).unwrap_or(0) {
+                0 => tab.title().to_string(),
+                n => format!("{} +{n}", tab.title()),
+            };
+            let galley = painter.layout_no_wrap(label, font, ui.visuals().strong_text_color());
             let size = galley.size() + vec2(12.0, 6.0);
             // Beside the pointer, kept on screen (to its left near the right edge).
             let mut min = p + vec2(10.0, 10.0);
@@ -397,9 +411,9 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
     fn leaf(&mut self, ui: &mut Ui, id: LeafId, rect: Rect, drag: Option<T>, ghost_tab: Option<T>) {
         let Some((_, tabs, active)) = self.tree.leaves().into_iter().find(|(l, ..)| *l == id) else { return };
         let tabs: Vec<T> = tabs.to_vec();
-        let in_bar = self.panels.tabs_in_bar() && self.panels.bar_shown();
+        let in_bar = self.panels.tabs_in_bar();
         let bars = self.panels.tab_bars() && !in_bar;
-        let bar_h = if bars { BAR_H } else { 0.0 };
+        let bar_h = if bars || in_bar { BAR_H } else { 0.0 };
         let (bar, body) = (Rect::from_min_size(rect.min, vec2(rect.width(), bar_h)), Rect::from_min_max(pos2(rect.min.x, rect.min.y + bar_h), rect.max));
         let vis = ui.visuals().clone();
         let p = ui.painter_at(rect);
@@ -407,7 +421,7 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         if !clear {
             p.rect_filled(rect, 4.0, vis.window_fill);
         }
-        if bars {
+        if bars || in_bar {
             p.rect_filled(bar, egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 }, vis.faint_bg_color);
         }
         // (A see-through body is a picture: it is its own edge.)
@@ -416,7 +430,9 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         }
 
         let mut set_active = None;
-        if bars {
+        if in_bar {
+            set_active = self.leaf_bar(ui, id, bar, &tabs, active, drag, ghost_tab);
+        } else if bars {
             // The tabs.
             let font = FontId::proportional(13.0);
             let mut x = bar.min.x + 4.0;
@@ -472,7 +488,7 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         let inner = if clear { body } else { body.shrink2(vec2(4.0, 2.0)) };
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).id_salt(("dock body", id)));
         child.set_clip_rect(inner);
-        if !bars && !in_bar {
+        if !bars && !in_bar && !(tabs.iter().all(|t| t.pinned()) && self.tree.leaves().len() == 1) {
             let titles: Vec<&'static str> = tabs.iter().map(|t| t.title()).collect();
             ui.ctx().data_mut(|d| {
                 d.insert_temp(grip_spec_id(), GripSpec(titles));
@@ -487,11 +503,9 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         } else {
             self.panels.tab(&mut child, tab);
         }
-        if self.lit == Some(id) {
-            let c = vis.selection.stroke.color;
-            ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.5, c), egui::StrokeKind::Inside);
-        }
-        if !bars && !in_bar {
+        // (a pinned tab alone in its window has nowhere to go: no patch)
+        let alone = tabs.iter().all(|t| t.pinned()) && self.tree.leaves().len() == 1;
+        if !bars && !in_bar && !alone {
             let placed = ui.ctx().data_mut(|d| {
                 d.remove::<GripSpec>(grip_spec_id());
                 let r = d.get_temp::<Rect>(grip_rect_id());
@@ -510,6 +524,68 @@ impl<T: Tab, P: Panels<T>> DockApp<'_, T, P> {
         if let Some(t) = set_active {
             self.tree.set_active(t);
         }
+    }
+
+    /// The other tabs in `tab`'s leaf.
+    fn leaf_mates(&self, tab: T) -> Vec<T> {
+        let leaf = self.tree.find(tab);
+        self.tree.leaves().into_iter().find(|(l, ..)| Some(*l) == leaf).map(|(_, tabs, _)| tabs.iter().copied().filter(|t| *t != tab).collect()).unwrap_or_default()
+    }
+
+    /// A leaf's own bar (`Panels::tabs_in_bar`) at `bar`: the app's items
+    /// (first leaf only), the leaf's "panels" menu, its tabs; a drop into
+    /// its middle shows as a ghost tab. Returns a tab clicked.
+    #[allow(clippy::too_many_arguments)]
+    fn leaf_bar(&mut self, ui: &mut Ui, id: LeafId, bar: Rect, tabs: &[T], active: usize, drag: Option<T>, ghost_tab: Option<T>) -> Option<T> {
+        let first = self.tree.leaves().first().map(|(l, ..)| *l) == Some(id);
+        let inner = bar.shrink2(vec2(4.0, 1.0));
+        let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).id_salt(("dock leaf bar", self.here, id)).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        ui.set_clip_rect(inner);
+        // The group's grip, always first: drags the whole leaf. (None on a
+        // leaf holding a pinned tab: that group stays where it is.)
+        if let Some(&lead) = tabs.get(active).filter(|_| !tabs.iter().any(|t| t.pinned())) {
+            let h = ui.spacing().interact_size.y;
+            let (g, resp) = ui.allocate_exact_size(vec2(GRIP_W, h), Sense::drag());
+            let vis = ui.visuals().clone();
+            let p = ui.painter();
+            if resp.hovered() || resp.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                p.rect_filled(g, 3.0, vis.widgets.hovered.bg_fill);
+            }
+            let c = if drag == Some(lead) && self.anim.group { vis.strong_text_color() } else if resp.hovered() { vis.text_color() } else { vis.weak_text_color() };
+            for row in -1..=1 {
+                for col in [-1.0f32, 1.0] {
+                    p.circle_filled(g.center() + vec2(col * 2.2, row as f32 * 4.0), 1.1, c);
+                }
+            }
+            if resp.drag_started() {
+                self.anim.drag = Some(lead);
+                self.anim.group = true;
+            }
+            resp.on_hover_text("drag to move this whole group of tabs: within the window, to another window, or out for a window of its own");
+        }
+        if first {
+            self.panels.bar(&mut ui);
+        }
+        ui.menu_button("panels", |ui| self.leaf_menu(ui, id, tabs)).response.on_hover_text(
+            "the panels in this bar: tick one to add it here (a second copy if it is open elsewhere), untick to take it out; drag a tab to move it, right-click it for more",
+        );
+        ui.add_space(6.0);
+        let mut clicked = None;
+        for (i, &tab) in tabs.iter().enumerate() {
+            let text = egui::RichText::new(tab.title());
+            let text = if drag == Some(tab) { text.weak() } else { text };
+            let resp = ui.add(egui::Button::selectable(i == active, text).sense(Sense::click_and_drag()));
+            ui.ctx().data_mut(|d| d.insert_temp(super::viewer::tab_rect_id(tab), resp.rect));
+            if self.tab_handle(resp, tab) {
+                clicked = Some(tab);
+            }
+        }
+        if let Some(t) = ghost_tab {
+            let c = ui.visuals().selection.stroke.color;
+            ui.label(egui::RichText::new(t.title()).color(c));
+        }
+        clicked
     }
 
     /// A compact leaf's patch at `r`: a grip (drags the tab on show) and,

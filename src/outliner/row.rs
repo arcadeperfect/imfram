@@ -20,7 +20,7 @@ pub const TRI_W: f32 = 14.0;
 pub const ICON_W: f32 = 18.0;
 /// A checkbox's column.
 pub const CHECK_W: f32 = 18.0;
-/// The column of a row's button, at its right.
+/// The column of each of a row's buttons, at its right.
 pub const BUTTON_W: f32 = 20.0;
 /// A checkbox's side, and a swatch's.
 const BOX: f32 = 12.0;
@@ -134,8 +134,8 @@ pub struct Lead<'a> {
     pub swatch: Option<Color32>,
     pub icon: Option<&'a str>,
     pub dimmed: bool,
-    /// A button at the row's right (the label stops short of it).
-    pub button: bool,
+    /// Buttons at the row's right (the label stops short of them).
+    pub buttons: usize,
 }
 
 impl Lead<'_> {
@@ -154,19 +154,22 @@ pub fn check_rect<Id>(rect: Rect, row: &Row<Id>) -> Rect {
 
 pub fn label_rect<Id>(rect: Rect, row: &Row<Id>, lead: &Lead) -> Rect {
     let x = tri_rect(rect, row).right() + GAP + lead.width();
-    let right = if lead.button { button_rect(rect).left() - GAP } else { rect.right() };
+    let right = if lead.buttons > 0 { button_rect(rect, 0, lead.buttons).left() - GAP } else { rect.right() };
     Rect::from_min_max(Pos2::new(x, rect.top()), Pos2::new(right.max(x), rect.bottom()))
 }
 
-/// The button's column, at the row's right.
-pub fn button_rect(rect: Rect) -> Rect {
-    Rect::from_min_max(Pos2::new(rect.right() - BUTTON_W - GAP, rect.top()), Pos2::new(rect.right() - GAP, rect.bottom()))
+/// Button `k` of `n`'s column, the last at the row's right.
+pub fn button_rect(rect: Rect, k: usize, n: usize) -> Rect {
+    let right = rect.right() - GAP - (n - 1 - k) as f32 * BUTTON_W;
+    Rect::from_min_max(Pos2::new(right - BUTTON_W, rect.top()), Pos2::new(right, rect.bottom()))
 }
 
 /// A row's button: a rounded box filled with the accent when on.
 pub fn paint_button(p: &Painter, r: Rect, b: super::RowButton, hovered: bool, pt: &Paint) {
     let r = Rect::from_center_size(r.center(), Vec2::new(BUTTON_W - 2.0, ROW_H - 6.0));
     let (bg, fg) = if b.on { (pt.accent, Color32::BLACK) } else if hovered { (pt.hover, pt.text) } else { (pt.check_bg, pt.weak) };
+    let alpha = if b.enabled { 1.0 } else { 0.4 };
+    let (bg, fg) = (bg.gamma_multiply(alpha), fg.gamma_multiply(alpha));
     p.rect_filled(r, 3.0, bg);
     p.text(r.center(), Align2::CENTER_CENTER, b.text, FontId::proportional(pt.font.size * 0.8), fg);
 }

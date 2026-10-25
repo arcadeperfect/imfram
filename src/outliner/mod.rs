@@ -16,8 +16,8 @@
 //! label (`dimmed`), which is what a flat list of switchable things needs
 //! (graav's biomes). `can_move` false keeps a row where it is.
 //! `show_fit` sizes the view to its rows, for a list inside a scrolling panel.
-//! A small button at the row's right (`button`; a click says `Button`) is
-//! for one thing done to the row, a solo, say.
+//! Small buttons at the row's right (`buttons`; a click says `Button`) are
+//! for things done to the row: a solo, a delete.
 
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -65,9 +65,9 @@ pub trait TreeModel {
     fn can_move(&self, _id: Self::Id) -> bool {
         true
     }
-    /// A small button at the row's right. None: no button.
-    fn button(&self, _id: Self::Id) -> Option<RowButton> {
-        None
+    /// Small buttons at the row's right, left to right.
+    fn buttons(&self, _id: Self::Id) -> Vec<RowButton> {
+        Vec::new()
     }
 }
 
@@ -76,6 +76,8 @@ pub trait TreeModel {
 pub struct RowButton {
     pub text: &'static str,
     pub on: bool,
+    /// False: drawn faint, and a click does nothing.
+    pub enabled: bool,
     pub hover: &'static str,
 }
 
@@ -100,8 +102,8 @@ pub enum Event<Id> {
     Activate(Id),
     /// The row's checkbox was clicked: what it asks to be now.
     Check(Id, bool),
-    /// The row's button was clicked.
-    Button(Id),
+    /// The row's button was clicked: which, among `buttons`.
+    Button(Id, usize),
 }
 
 struct Rename<Id> {
@@ -241,19 +243,19 @@ impl<Id: Copy + Eq + Hash + Debug> Outliner<Id> {
         };
         let icon = m.icon(row.id);
         let check = m.check(row.id);
-        let button = m.button(row.id);
-        let lead = Lead { check, swatch: m.swatch(row.id), icon, dimmed: m.dimmed(row.id), button: button.is_some() };
+        let buttons = m.buttons(row.id);
+        let lead = Lead { check, swatch: m.swatch(row.id), icon, dimmed: m.dimmed(row.id), buttons: buttons.len() };
         let label = m.label(row.id);
         row::paint_row(ui.painter(), rect, &row, &label, &lead, self.expanded.contains(&row.id), &look, pt, renaming);
-        if let Some(b) = button {
+        for (k, b) in buttons.iter().enumerate() {
             // Its own widget over the row's, so it takes its clicks (a
             // quick second one too) and shows what it does.
-            let r = row::button_rect(rect);
-            let br = ui.interact(r, base.with(("button", row.id)), Sense::click());
-            row::paint_button(ui.painter(), r, b, br.hovered(), pt);
-            if br.clicked() {
+            let r = row::button_rect(rect, k, buttons.len());
+            let br = ui.interact(r, base.with(("button", row.id, k)), Sense::click());
+            row::paint_button(ui.painter(), r, *b, br.hovered() && b.enabled, pt);
+            if br.clicked() && b.enabled {
                 ui.memory_mut(|mem| mem.request_focus(base));
-                ev.push(Event::Button(row.id));
+                ev.push(Event::Button(row.id, k));
             }
             br.on_hover_text(b.hover);
         }

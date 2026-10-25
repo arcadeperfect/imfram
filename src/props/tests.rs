@@ -177,3 +177,72 @@ fn rows_in_a_section_report_through_the_sheet() {
     });
     assert_eq!(events, vec![(Id::new("inner"), RowEvent::Changed)]);
 }
+
+#[test]
+fn a_switched_section_lines_up_with_the_rows_round_it_and_greys_its_own() {
+    let ctx = egui::Context::default();
+    let (mut a, mut b, mut on) = (true, true, false);
+    let events = frame(&ctx, vec![], |ui| {
+        let mut s = Sheet::new(ui);
+        s.toggle("outside", &mut a);
+        s.switched(&mut on, "fold", "", Start::Open, |s| {
+            s.custom("inner", |ui| {
+                assert!(!ui.is_enabled(), "a switched-off section's rows are greyed");
+                false
+            });
+            s.toggle("inside", &mut b);
+        });
+        s.finish()
+    });
+    assert!(events.is_empty());
+    let outside = rects(&ctx, Id::new("outside")).unwrap();
+    let inside = rects(&ctx, Id::new("inside")).unwrap();
+    // The group indents its body, and the label column gives it back.
+    assert!((outside.control.min.x - inside.control.min.x).abs() < 0.5, "{outside:?} {inside:?}");
+    assert_eq!(outside.control.max.x, inside.control.max.x);
+}
+
+#[test]
+fn no_row_is_wider_than_its_room() {
+    // A row past its room makes a resizable panel grow every frame.
+    let (mut f, mut i, mut t, mut on, mut v2) = (0.5f32, 3, String::from("name"), true, [1.0f32, 2.0]);
+    let mut used = Vec::new();
+    for room in [320.0f32, 640.0] {
+        let ctx = egui::Context::default();
+        frame(&ctx, vec![], |ui| {
+            ui.set_max_width(room);
+            let left = ui.max_rect().left();
+            let mut s = Sheet::new(ui);
+            s.slider("slider", &mut f, (0.0, 1.0), false);
+            s.int("int", &mut i, (0, 9));
+            s.text("text", &mut t);
+            s.vec2("vec2", &mut v2);
+            s.switched(&mut on, "fold", "", Start::Open, |s| {
+                s.slider("inner", &mut f, (0.0, 1.0), false);
+            });
+            let ev = s.finish();
+            used.push((room, ui.min_rect().right() - left));
+            ev
+        });
+    }
+    for (room, w) in used {
+        assert!(w <= room + 0.5, "{w} used of {room}");
+    }
+}
+
+#[test]
+fn every_control_ends_at_the_same_x() {
+    let (mut f, mut i, mut t) = (0.5f32, 3, String::from("name"));
+    let ctx = egui::Context::default();
+    frame(&ctx, vec![], |ui| {
+        let mut s = Sheet::new(ui);
+        s.slider("slider", &mut f, (0.0, 1.0), false);
+        s.int("int", &mut i, (0, 9));
+        s.text("text", &mut t);
+        s.finish()
+    });
+    let end = |r: &str| rects(&ctx, Id::new(r)).unwrap().control.right();
+    // (The slider's value box once ran a gap past the others.)
+    let ends = ["slider", "int", "text"].map(end);
+    assert!(ends.iter().all(|e| (e - ends[0]).abs() < 0.5), "{ends:?}");
+}

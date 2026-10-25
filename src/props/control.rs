@@ -68,7 +68,7 @@ impl Control<'_> {
         let gap = ui.spacing().item_spacing.x;
         match self {
             Control::Slider { v, range, log } => {
-                // The slider's own value box and an empty label follow its rail.
+                // The slider's own value box follows its rail, a gap between.
                 ui.spacing_mut().slider_width = (ui.available_width() - NUM_W - gap).max(MIN_RAIL);
                 widgets::slider(ui, v, *range, "", *log, "")
             }

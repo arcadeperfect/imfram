@@ -77,7 +77,10 @@ pub fn row(ui: &mut Ui, value: &mut f32, (lo, hi): (f32, f32), text: &str, log: 
             [NUM_W, rail.rect.height()],
             egui::DragValue::new(&mut shown).speed(speed.max(1e-7)).max_decimals(6),
         );
-        ui.label(text);
+        // (No label, no gap for one: a row in a sheet ends at its box.)
+        if !text.is_empty() {
+            ui.label(text);
+        }
         match rate_drag(ui, &rail, rate) {
             // The slider's own jump-to-pointer this frame is dropped.
             Some(travel) if travel != 0.0 => *value = rate::dragged(before, travel, lo, hi, log),

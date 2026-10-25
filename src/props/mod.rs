@@ -52,6 +52,8 @@ pub const KEY_W: f32 = 16.0;
 pub const NUM_W: f32 = widgets::slider::NUM_W;
 /// Height of a one-line row (egui's interact height).
 pub const ROW_H: f32 = 18.0;
+/// The least a label is given when a section's indent comes out of it.
+const MIN_LABEL: f32 = 24.0;
 /// The least a control is given, however narrow the panel.
 const MIN_CONTROL: f32 = 60.0;
 /// Rail kept for a slider beside its number field.
@@ -160,6 +162,10 @@ fn remember(ui: &Ui, row: RowId, r: RowRects) {
 pub struct Sheet<'a> {
     ui: &'a mut Ui,
     label_w: f32,
+    /// Where the outermost sheet's rows start: a section's rows are
+    /// indented, and give the indent back out of their label column so
+    /// every control still starts at one x.
+    left: f32,
     key_column: bool,
     rgb_spec: rgbslider::RgbSpec,
     defaults: Option<&'a Defaults>,
@@ -170,7 +176,8 @@ impl<'a> Sheet<'a> {
     pub fn new(ui: &'a mut Ui) -> Self {
         // Rec.709 luma, a gain's range: what an rgb row means unless told.
         let rgb_spec = rgbslider::RgbSpec::scale(0.0, 2.0, [0.2126, 0.7152, 0.0722]);
-        Self { ui, label_w: LABEL_W, key_column: false, rgb_spec, defaults: None, events: Vec::new() }
+        let left = ui.cursor().left();
+        Self { ui, label_w: LABEL_W, left, key_column: false, rgb_spec, defaults: None, events: Vec::new() }
     }
 
     /// Width of the label column.
@@ -205,14 +212,53 @@ impl<'a> Sheet<'a> {
 
     /// A foldable group of rows, aligned to the same columns.
     pub fn section(&mut self, name: &str, start: Start, body: impl FnOnce(&mut Sheet<'_>)) {
-        let (label_w, key_column, rgb_spec, defaults) = (self.label_w, self.key_column, self.rgb_spec, self.defaults);
+        self.fold(body, |ui, body| group::group(ui, name, "", start, body));
+    }
+
+    /// `section` with hover text on its header: what the group is for, so
+    /// the rows under it need not say it.
+    pub fn section_tip(&mut self, name: &str, hint: &str, start: Start, body: impl FnOnce(&mut Sheet<'_>)) {
+        self.fold(body, |ui, body| group::group(ui, name, hint, start, body));
+    }
+
+    /// A section with a switch on its header (`group::switched`): off, its
+    /// rows are greyed. A flip of the switch comes back as `Changed` on the
+    /// row named `name`.
+    pub fn switched(&mut self, on: &mut bool, name: &str, hint: &str, start: Start, body: impl FnOnce(&mut Sheet<'_>)) {
+        let was = *on;
+        self.fold(body, |ui, body| group::switched(ui, on, name, hint, start, body));
+        if *on != was {
+            self.events.push((Id::new(name), RowEvent::Changed));
+        }
+    }
+
+    /// Lay `body`'s rows out inside whatever `wrap` puts round them (a
+    /// group), on this sheet's columns, and keep their events.
+    fn fold(&mut self, body: impl FnOnce(&mut Sheet<'_>), wrap: impl FnOnce(&mut Ui, &mut dyn FnMut(&mut Ui))) {
+        let (label_w, left, key_column, rgb_spec, defaults) = (self.label_w, self.left, self.key_column, self.rgb_spec, self.defaults);
         let mut events = Vec::new();
-        group::group(self.ui, name, "", start, |ui| {
-            let mut inner = Sheet { ui, label_w, key_column, rgb_spec, defaults, events: Vec::new() };
-            body(&mut inner);
-            events = inner.events;
+        let mut body = Some(body);
+        wrap(self.ui, &mut |ui: &mut Ui| {
+            if let Some(body) = body.take() {
+                let indent = ui.cursor().left() - left;
+                let label_w = (label_w - indent).max(MIN_LABEL);
+                let mut inner = Sheet { ui, label_w, left, key_column, rgb_spec, defaults, events: Vec::new() };
+                body(&mut inner);
+                events = inner.events;
+            }
         });
         self.events.extend(events);
+    }
+
+    /// A line of weak text in the control column: a word about the rows
+    /// near it worth reading every time (not a tip).
+    pub fn note(&mut self, text: &str) {
+        let indent = DOT_W + self.label_w + self.ui.spacing().item_spacing.x * 2.0;
+        // (label_w already gave back any section indent.)
+        self.ui.horizontal(|ui| {
+            ui.add_space(indent);
+            ui.add(egui::Label::new(egui::RichText::new(text).weak()).wrap());
+        });
     }
 
     /// What was done this frame, row by row.
@@ -300,8 +346,10 @@ impl<'a> Sheet<'a> {
             let font = egui::TextStyle::Body.resolve(ui.style());
             ui.painter().with_clip_rect(label_rect).text(label_rect.right_center(), Align2::RIGHT_CENTER, label, font, ui.visuals().weak_text_color());
             // Control: the rest, less the key slot.
+            // (egui adds the gap before the next widget, not after the last:
+            // the room left is short of it.)
             let key_w = if show_key { KEY_W + gap } else { 0.0 };
-            let cw = (ui.available_width() - key_w).max(MIN_CONTROL);
+            let cw = (ui.available_width() - gap - key_w).max(MIN_CONTROL);
             let c = ui.allocate_ui_with_layout(vec2(cw, height), Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.set_min_size(vec2(cw, height));
                 control.show(ui, wid, rgb_spec)

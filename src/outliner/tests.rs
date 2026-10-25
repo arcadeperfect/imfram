@@ -177,3 +177,67 @@ fn only_the_visible_slice_of_a_long_tree_is_laid_out() {
     assert!(v.start == 0 && v.len() <= 8, "{v:?}");
     let _ = shot;
 }
+
+/// Three switchable things in a flat list; the last cannot be switched.
+struct Switches {
+    on: [bool; 3],
+}
+
+impl TreeModel for Switches {
+    type Id = usize;
+    fn roots(&self) -> Vec<usize> {
+        vec![0, 1, 2]
+    }
+    fn children(&self, _: usize) -> Vec<usize> {
+        vec![]
+    }
+    fn label(&self, id: usize) -> String {
+        format!("item {id}")
+    }
+    fn check(&self, id: usize) -> Option<Check> {
+        Some(Check { on: self.on[id], enabled: id != 2 })
+    }
+    fn swatch(&self, _: usize) -> Option<egui::Color32> {
+        Some(egui::Color32::GREEN)
+    }
+    fn can_move(&self, _: usize) -> bool {
+        false
+    }
+}
+
+#[test]
+fn a_checkbox_click_asks_to_switch_and_selects_nothing() {
+    let t = Switches { on: [true, false, true] };
+    let mut o = Outliner::<usize>::new();
+    let mut d = Drive::new(300.0, 200.0);
+    d.idle(1, show!(o, t));
+    // (A flat list keeps no triangle column.)
+    let at = |i: usize| Pos2::new(GAP + CHECK_W * 0.5, i as f32 * ROW_H + ROW_H * 0.5);
+    assert_eq!(flat(d.click(at(0), Modifiers::NONE, show!(o, t))), vec![Event::Check(0, false)]);
+    assert_eq!(flat(d.click(at(1), Modifiers::NONE, show!(o, t))), vec![Event::Check(1, true)]);
+    assert_eq!(flat(d.click(at(1), Modifiers::NONE, show!(o, t))), vec![Event::Check(1, true)], "a quick second click is a click, not a rename");
+    d.idle(2, show!(o, t));
+    assert!(o.rename.is_none());
+    assert!(flat(d.click(at(2), Modifiers::NONE, show!(o, t))).is_empty(), "a disabled box does nothing");
+    assert!(o.selection.is_empty());
+    assert_eq!(flat(d.click(row(1), Modifiers::NONE, show!(o, t))), vec![Event::Select(vec![1])], "the label still selects");
+}
+
+#[test]
+fn a_fitted_list_is_as_tall_as_its_rows() {
+    let t = Switches { on: [true; 3] };
+    let mut o = Outliner::<usize>::new();
+    let mut d = Drive::new(300.0, 400.0);
+    let used = d.frame(vec![], &mut |ui: &mut egui::Ui| {
+        let top = ui.cursor().top();
+        o.show_fit(ui, &t, 8);
+        ui.cursor().top() - top
+    });
+    assert!((used - 3.0 * ROW_H).abs() < ROW_H * 0.5, "{used}");
+    let used = d.frame(vec![], &mut |ui: &mut egui::Ui| {
+        let top = ui.cursor().top();
+        o.show_fit(ui, &t, 2);
+        ui.cursor().top() - top
+    });
+    assert!((used - 2.0 * ROW_H).abs() < ROW_H * 0.5, "{used}");
+}

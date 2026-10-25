@@ -16,10 +16,14 @@ pub const ROW_H: f32 = 20.0;
 pub const INDENT: f32 = 14.0;
 /// The disclosure triangle's column.
 pub const TRI_W: f32 = 14.0;
-/// An icon's column.
+/// An icon's (or a swatch's) column.
 pub const ICON_W: f32 = 18.0;
-/// Space between the icon or triangle and the label.
-const GAP: f32 = 4.0;
+/// A checkbox's column.
+pub const CHECK_W: f32 = 18.0;
+/// A checkbox's side, and a swatch's.
+const BOX: f32 = 12.0;
+/// Space after the triangle's column.
+pub const GAP: f32 = 4.0;
 /// The drop line's thickness.
 const SLOT_W: f32 = 2.0;
 /// The top and bottom bands of a row that mean "between", not "onto".
@@ -34,6 +38,9 @@ pub struct Row<Id> {
     pub index: usize,
     pub depth: usize,
     pub has_children: bool,
+    /// Nothing on show has children: a flat list, with no column kept for
+    /// the triangles.
+    pub flat: bool,
 }
 
 /// Every node under an expanded ancestor, in display order.
@@ -43,10 +50,14 @@ pub fn flatten<M: TreeModel>(m: &M, expanded: &HashSet<M::Id>) -> Vec<Row<M::Id>
         m.roots().into_iter().enumerate().rev().map(|(i, id)| (id, None, i, 0)).collect();
     while let Some((id, parent, index, depth)) = stack.pop() {
         let kids = m.children(id);
-        out.push(Row { id, parent, index, depth, has_children: !kids.is_empty() });
+        out.push(Row { id, parent, index, depth, has_children: !kids.is_empty(), flat: false });
         if expanded.contains(&id) {
             stack.extend(kids.into_iter().enumerate().rev().map(|(i, k)| (k, Some(id), i, depth + 1)));
         }
+    }
+    let flat = out.iter().all(|r| r.depth == 0 && !r.has_children);
+    for r in &mut out {
+        r.flat = flat;
     }
     out
 }
@@ -84,6 +95,7 @@ pub struct Paint {
     pub hover: Color32,
     pub selected: Color32,
     pub accent: Color32,
+    pub check_bg: Color32,
 }
 
 impl Paint {
@@ -97,6 +109,7 @@ impl Paint {
             hover: v.widgets.hovered.weak_bg_fill,
             selected: v.selection.bg_fill,
             accent: v.selection.stroke.color,
+            check_bg: v.widgets.inactive.bg_fill,
         }
     }
 }
@@ -109,17 +122,41 @@ pub struct Look {
 
 pub fn tri_rect<Id>(rect: Rect, row: &Row<Id>) -> Rect {
     let x = rect.left() + row.depth as f32 * INDENT;
-    Rect::from_min_size(Pos2::new(x, rect.top()), Vec2::new(TRI_W, rect.height()))
+    let w = if row.flat { 0.0 } else { TRI_W };
+    Rect::from_min_size(Pos2::new(x, rect.top()), Vec2::new(w, rect.height()))
 }
 
-pub fn label_rect<Id>(rect: Rect, row: &Row<Id>, icon: bool) -> Rect {
-    let x = tri_rect(rect, row).right() + GAP + if icon { ICON_W } else { 0.0 };
+/// What sits left of a row's label, from the model.
+pub struct Lead<'a> {
+    pub check: Option<super::Check>,
+    pub swatch: Option<Color32>,
+    pub icon: Option<&'a str>,
+    pub dimmed: bool,
+}
+
+impl Lead<'_> {
+    fn width(&self) -> f32 {
+        let check = if self.check.is_some() { CHECK_W } else { 0.0 };
+        let icon = if self.swatch.is_some() || self.icon.is_some() { ICON_W } else { 0.0 };
+        check + icon
+    }
+}
+
+/// The checkbox's column, right of the triangle's.
+pub fn check_rect<Id>(rect: Rect, row: &Row<Id>) -> Rect {
+    let x = tri_rect(rect, row).right() + GAP;
+    Rect::from_min_size(Pos2::new(x, rect.top()), Vec2::new(CHECK_W, rect.height()))
+}
+
+pub fn label_rect<Id>(rect: Rect, row: &Row<Id>, lead: &Lead) -> Rect {
+    let x = tri_rect(rect, row).right() + GAP + lead.width();
     Rect::from_min_max(Pos2::new(x, rect.top()), rect.max)
 }
 
 /// Background, triangle, icon; the label unless `skip_label` (a rename
 /// field sits there instead).
-pub fn paint_row<Id>(p: &Painter, rect: Rect, row: &Row<Id>, label: &str, icon: Option<&str>, expanded: bool, look: &Look, pt: &Paint, skip_label: bool) {
+#[allow(clippy::too_many_arguments)]
+pub fn paint_row<Id>(p: &Painter, rect: Rect, row: &Row<Id>, label: &str, lead: &Lead, expanded: bool, look: &Look, pt: &Paint, skip_label: bool) {
     if look.selected {
         p.rect_filled(rect, 0.0, pt.selected);
     } else if look.hovered {
@@ -138,13 +175,32 @@ pub fn paint_row<Id>(p: &Painter, rect: Rect, row: &Row<Id>, label: &str, icon: 
         p.add(Shape::convex_polygon(pts, if look.selected { fg } else { pt.weak }, Stroke::NONE));
     }
     let mut x = tri_rect(rect, row).right() + GAP;
-    if let Some(ic) = icon {
+    if let Some(c) = lead.check {
+        paint_check(p, Rect::from_center_size(check_rect(rect, row).center(), Vec2::splat(BOX)), c, pt);
+        x += CHECK_W;
+    }
+    if let Some(sw) = lead.swatch {
+        let r = Rect::from_center_size(Pos2::new(x + ICON_W * 0.5, rect.center().y), Vec2::splat(BOX));
+        p.rect_filled(r, 2.0, sw);
+        x += ICON_W;
+    } else if let Some(ic) = lead.icon {
         p.text(Pos2::new(x + ICON_W * 0.5, rect.center().y), Align2::CENTER_CENTER, ic, pt.font.clone(), fg);
         x += ICON_W;
     }
+    let fg = if lead.dimmed && !look.selected { pt.weak } else { fg };
     if !skip_label {
         let clip = Rect::from_min_max(Pos2::new(x, rect.top()), rect.max);
         p.with_clip_rect(clip.intersect(p.clip_rect())).text(Pos2::new(x, rect.center().y), Align2::LEFT_CENTER, label, pt.font.clone(), fg);
+    }
+}
+
+/// A checkbox: a box, ticked when on; faint when it cannot be clicked.
+fn paint_check(p: &Painter, r: Rect, c: super::Check, pt: &Paint) {
+    let alpha = if c.enabled { 1.0 } else { 0.4 };
+    p.rect_filled(r, 2.0, pt.check_bg.gamma_multiply(alpha));
+    if c.on {
+        let tick = [r.left_center() + Vec2::new(2.5, 0.0), r.center_bottom() + Vec2::new(-1.0, -3.0), r.right_top() + Vec2::new(-2.5, 3.0)];
+        p.add(Shape::line(tick.to_vec(), Stroke::new(1.6, pt.text.gamma_multiply(alpha))));
     }
 }
 

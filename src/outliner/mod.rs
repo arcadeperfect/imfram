@@ -10,6 +10,12 @@
 //! reparent, appended); arrows walk the rows, left folds or climbs, right
 //! unfolds or descends, Enter activates. Rows are virtual: only the visible
 //! slice is laid out. Colours come from `Visuals`.
+//!
+//! A row may also carry a checkbox (`TreeModel::check`; a click on it says
+//! `Check`), a colour swatch in the icon's column (`swatch`) and a dimmed
+//! label (`dimmed`), which is what a flat list of switchable things needs
+//! (graav's biomes). `can_move` false keeps a row where it is.
+//! `show_fit` sizes the view to its rows, for a list inside a scrolling panel.
 
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -24,8 +30,8 @@ pub(crate) mod drive;
 #[cfg(test)]
 mod tests;
 
-pub use row::{Row, ICON_W, INDENT, ROW_H, TRI_W};
-use row::{Look, Paint, RenameOut, Slot};
+pub use row::{Row, CHECK_W, GAP, ICON_W, INDENT, ROW_H, TRI_W};
+use row::{Lead, Look, Paint, RenameOut, Slot};
 
 /// The app's tree, read-only. Children are asked for on demand, so a
 /// model may be lazy; ids must be stable across frames.
@@ -40,6 +46,31 @@ pub trait TreeModel {
     fn can_rename(&self, _id: Self::Id) -> bool {
         true
     }
+    /// A checkbox at the row's left: whether it is on, and whether it may
+    /// be clicked now. None: no box.
+    fn check(&self, _id: Self::Id) -> Option<Check> {
+        None
+    }
+    /// A colour swatch in the icon's column (instead of an icon).
+    fn swatch(&self, _id: Self::Id) -> Option<egui::Color32> {
+        None
+    }
+    /// The label drawn weak (a thing switched off).
+    fn dimmed(&self, _id: Self::Id) -> bool {
+        false
+    }
+    /// Whether the row can be dragged elsewhere.
+    fn can_move(&self, _id: Self::Id) -> bool {
+        true
+    }
+}
+
+/// A row's checkbox.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Check {
+    pub on: bool,
+    /// False: drawn greyed, and a click does nothing.
+    pub enabled: bool,
 }
 
 /// What the user asked for this frame.
@@ -53,6 +84,8 @@ pub enum Event<Id> {
     Move { id: Id, parent: Option<Id>, index: usize },
     /// Enter on a row, or a double-click on one that cannot be renamed.
     Activate(Id),
+    /// The row's checkbox was clicked: what it asks to be now.
+    Check(Id, bool),
 }
 
 struct Rename<Id> {
@@ -119,6 +152,19 @@ impl<Id: Copy + Eq + Hash + Debug> Outliner<Id> {
         self.visible.clone()
     }
 
+    /// `show` in a box as tall as the rows on show, `max_rows` at most
+    /// (past that it scrolls), and as wide as there is: a list among other
+    /// controls rather than a pane of its own.
+    pub fn show_fit<M: TreeModel<Id = Id>>(&mut self, ui: &mut Ui, m: &M, max_rows: usize) -> Vec<Event<Id>> {
+        let n = row::flatten(m, &self.expanded).len().clamp(1, max_rows.max(1));
+        let size = egui::vec2(ui.available_width(), n as f32 * ROW_H);
+        let r = ui.allocate_ui(size, |ui| {
+            ui.set_min_size(size);
+            self.show(ui, m)
+        });
+        r.inner
+    }
+
     pub fn show<M: TreeModel<Id = Id>>(&mut self, ui: &mut Ui, m: &M) -> Vec<Event<Id>> {
         let mut ev = Vec::new();
         let rows = row::flatten(m, &self.expanded);
@@ -137,7 +183,7 @@ impl<Id: Copy + Eq + Hash + Debug> Outliner<Id> {
         let pt = Paint::from(ui);
         ui.scope(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]).show_rows(ui, ROW_H, rows.len(), |ui, range| {
+            egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]).min_scrolled_height(ROW_H).show_rows(ui, ROW_H, rows.len(), |ui, range| {
                 self.visible = range.clone();
                 // Row i's rect, for any i: the content's top is `range.start` rows above the viewport.
                 let top0 = ui.max_rect().top() - range.start as f32 * ROW_H;
@@ -178,12 +224,14 @@ impl<Id: Copy + Eq + Hash + Debug> Outliner<Id> {
             dragged: self.drag.as_ref().is_some_and(|d| d.forbidden.contains(&row.id)),
         };
         let icon = m.icon(row.id);
+        let check = m.check(row.id);
+        let lead = Lead { check, swatch: m.swatch(row.id), icon, dimmed: m.dimmed(row.id) };
         let label = m.label(row.id);
-        row::paint_row(ui.painter(), rect, &row, &label, icon, self.expanded.contains(&row.id), &look, pt, renaming);
+        row::paint_row(ui.painter(), rect, &row, &label, &lead, self.expanded.contains(&row.id), &look, pt, renaming);
         if renaming {
             let r = self.rename.as_mut().unwrap();
             let fresh = std::mem::replace(&mut r.fresh, false);
-            match row::rename_field(ui, row::label_rect(rect, &row, icon.is_some()), base.with(("rename", row.id)), &mut r.text, fresh) {
+            match row::rename_field(ui, row::label_rect(rect, &row, &lead), base.with(("rename", row.id)), &mut r.text, fresh) {
                 RenameOut::Editing => {}
                 RenameOut::Cancel => {
                     self.rename = None;
@@ -197,6 +245,16 @@ impl<Id: Copy + Eq + Hash + Debug> Outliner<Id> {
                         ev.push(Event::Rename(row.id, text));
                     }
                 }
+            }
+            return;
+        }
+        // The checkbox takes every click on it, a quick second one too
+        // (which would otherwise be a double-click: a rename).
+        let on_check = check.is_some() && resp.interact_pointer_pos().is_some_and(|p| row::check_rect(rect, &row).contains(p));
+        if on_check {
+            if let Some(c) = check.filter(|c| resp.clicked() && c.enabled) {
+                ui.memory_mut(|mem| mem.request_focus(base));
+                ev.push(Event::Check(row.id, !c.on));
             }
             return;
         }
@@ -215,7 +273,7 @@ impl<Id: Copy + Eq + Hash + Debug> Outliner<Id> {
                 self.click(rows, i, mods, ev);
             }
         }
-        if resp.drag_started() {
+        if resp.drag_started() && m.can_move(row.id) {
             if !self.selection.contains(&row.id) {
                 self.set_selection(vec![row.id], ev);
                 self.cursor = Some(row.id);

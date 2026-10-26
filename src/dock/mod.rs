@@ -325,10 +325,24 @@ impl<T: Tab> Docks<T> {
     }
 
     pub fn poll(&mut self) {
+        // (A control carried to a composer: every window looks for it.)
+        let carrying = crate::composer::carrying();
         for h in &mut self.hosts {
+            if carrying {
+                h.win.request_repaint();
+            }
             if let Some(w) = h.win.own() {
                 w.poll();
             }
+        }
+    }
+
+    /// Tell window `i`'s egui where it is on the screen (a composer drag
+    /// crossing windows reads it).
+    fn place(&self, i: usize) {
+        let win = self.hosts[i].win.window();
+        if let Ok(o) = win.inner_position() {
+            crate::composer::set_screen_origin(self.hosts[i].win.ctx(), [o.x as f64, o.y as f64], win.scale_factor());
         }
     }
 
@@ -469,6 +483,7 @@ impl<T: Tab> Docks<T> {
     /// and presented (or, with `offscreen` events injected, rendered to a
     /// texture for a scripted test), then a tab dragged out tracked.
     pub fn frame<P: Panels<T>>(&mut self, i: usize, gpu: &Gpu, panels: &mut P, offscreen: Option<Vec<egui::Event>>) -> Option<wgpu::Texture> {
+        self.place(i);
         let others = self.others(i);
         let open = self.open_tabs();
         let dropping = self.dropping_into(i);
@@ -495,6 +510,7 @@ impl<T: Tab> Docks<T> {
     /// The dock drawn into the app's own egui frame (an external host):
     /// `ui` is the room it gets. Call `raw_input` before the frame.
     pub fn draw_external<P: Panels<T>>(&mut self, i: usize, ui: &mut egui::Ui, panels: &mut P) {
+        self.place(i);
         let others = self.others(i);
         let open = self.open_tabs();
         let dropping = self.dropping_into(i);

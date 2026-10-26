@@ -38,6 +38,76 @@ pub fn set_pick_mode(on: bool) {
     PICK_MODE.store(on, Ordering::Relaxed);
 }
 
+/// A control carried by an Alt-drag, for a composer in ANOTHER OS window
+/// (egui's drag and drop is one window's): where the pointer is on the
+/// screen, and when it was let go. The window it came from drops it as
+/// usual; any other takes it if it was let go over its composer.
+#[derive(Clone, Debug)]
+struct Carry {
+    pick: Pick,
+    from: u64,
+    at: Option<[f64; 2]>,
+    released: Option<std::time::Instant>,
+}
+
+static CARRY: Mutex<Option<Carry>> = Mutex::new(None);
+
+/// How long a carry let go over no composer waits to be taken.
+const CARRY_KEPT: std::time::Duration = std::time::Duration::from_millis(1000);
+
+fn carry<R>(f: impl FnOnce(&mut Option<Carry>) -> R) -> R {
+    f(&mut CARRY.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// A control is being carried (or was just let go): every window with a
+/// composer should draw, to show the drop or take it.
+pub fn carrying() -> bool {
+    carry(|c| c.as_ref().is_some_and(|c| c.released.is_none_or(|t| t.elapsed() < CARRY_KEPT)))
+}
+
+/// One number per context, so a carry knows the window it came from.
+fn ctx_tag(ctx: &Context) -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    ctx.data_mut(|d| *d.get_temp_mut_or_insert_with(Id::new("imfram-composer-ctx-tag"), || NEXT.fetch_add(1, Ordering::Relaxed)))
+}
+
+fn origin_id() -> Id {
+    Id::new("imfram-screen-origin")
+}
+
+/// Where this context's window is on the screen (its inner top-left, in
+/// physical pixels) and its scale: set by the dock before each frame, so a
+/// drag can cross windows. Without it, a carry stays in its window.
+pub fn set_screen_origin(ctx: &Context, origin: [f64; 2], scale: f64) {
+    ctx.data_mut(|d| d.insert_temp(origin_id(), (origin, scale)));
+}
+
+fn to_screen(ctx: &Context, p: egui::Pos2) -> Option<[f64; 2]> {
+    let (o, k): ([f64; 2], f64) = ctx.data(|d| d.get_temp(origin_id()))?;
+    Some([o[0] + p.x as f64 * k, o[1] + p.y as f64 * k])
+}
+
+fn from_screen(ctx: &Context, s: [f64; 2]) -> Option<egui::Pos2> {
+    let (o, k): ([f64; 2], f64) = ctx.data(|d| d.get_temp(origin_id()))?;
+    Some(egui::pos2(((s[0] - o[0]) / k) as f32, ((s[1] - o[1]) / k) as f32))
+}
+
+/// A control carried from another window: what, where the pointer is in
+/// this window's points, and whether it has been let go.
+pub(super) fn carried_here(ctx: &Context) -> Option<(Pick, egui::Pos2, bool)> {
+    let me = ctx_tag(ctx);
+    let c = carry(|c| c.clone())?;
+    if c.from == me || c.released.is_some_and(|t| t.elapsed() >= CARRY_KEPT) {
+        return None;
+    }
+    Some((c.pick, from_screen(ctx, c.at?)?, c.released.is_some()))
+}
+
+/// The carry was dropped somewhere: no other window takes it too.
+pub(super) fn end_carry() {
+    carry(|c| *c = None);
+}
+
 /// Controls clicked in pick mode since the last call.
 pub(super) fn take_picked() -> Vec<Pick> {
     std::mem::take(&mut *PICKED.lock().unwrap_or_else(|e| e.into_inner()))
@@ -223,6 +293,14 @@ fn grab(ui: &mut Ui, key: String, name: &str, rect: Rect) {
     let pick = Pick { key, name: name.to_owned() };
     if resp.drag_started() {
         DragAndDrop::set_payload(ui.ctx(), pick.clone());
+    }
+    // (Followed on the screen too, for a composer in another window.)
+    if resp.dragged() || resp.drag_stopped() {
+        let at = ui.ctx().pointer_latest_pos().and_then(|p| to_screen(ui.ctx(), p));
+        let from = ctx_tag(ui.ctx());
+        let released = resp.drag_stopped().then(std::time::Instant::now);
+        carry(|c| *c = Some(Carry { pick: pick.clone(), from, at, released }));
+        ui.ctx().request_repaint();
     }
     if resp.dragged() {
         if let Some(at) = ui.ctx().pointer_interact_pos() {

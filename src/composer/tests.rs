@@ -285,3 +285,51 @@ fn a_renamed_row_hands_its_control_the_new_label() {
     }
     assert_eq!(seen, vec![("page", "outside".to_owned()), ("slot", "boost".to_owned())]);
 }
+
+#[test]
+fn an_alt_drag_lands_in_a_composer_in_another_window() {
+    // Two windows side by side on the screen: the page at x 0, the
+    // composer's at x 1000 (physical pixels, scale 2).
+    let (page, other) = (egui::Context::default(), egui::Context::default());
+    set_screen_origin(&page, [0.0, 0.0], 2.0);
+    set_screen_origin(&other, [1000.0, 0.0], 2.0);
+    let mut c = Composer::default();
+    let mut found = None;
+    let draw_page = |events: Vec<Event>, found: &mut Option<Rect>| {
+        frame(&page, events, Modifiers::ALT, |ui| {
+            scope(ui, "Page", |ui| {
+                item(ui, "probe", |ui| *found = Some(ui.label("probe").rect));
+            });
+        });
+    };
+    let mut draw_other = |c: &mut Composer| {
+        let mut changed = false;
+        frame(&other, vec![], Modifiers::NONE, |ui| {
+            changed |= c.show(ui, |ui| {
+                scope(ui, "Page", |ui| {
+                    item(ui, "probe", |ui| {
+                        ui.label("probe");
+                    });
+                });
+            });
+        });
+        changed
+    };
+    draw_page(vec![], &mut found);
+    draw_other(&mut c);
+    let from = found.unwrap().center();
+    // 1000 px right of the page's origin is the other window's left edge:
+    // 500 points at scale 2. Aim 60 points into it.
+    let to = pos2(560.0, 30.0);
+    draw_page(vec![Event::PointerMoved(from)], &mut found);
+    draw_page(vec![press(from, true)], &mut found);
+    for i in 1..=6 {
+        draw_page(vec![Event::PointerMoved(from + (to - from) * (i as f32 / 6.0))], &mut found);
+        draw_other(&mut c);
+    }
+    draw_page(vec![press(to, false)], &mut found);
+    assert!(carrying(), "let go over another window: still on offer");
+    assert!(draw_other(&mut c), "the other window's composer takes it");
+    assert_eq!(c.entries, vec![Entry { key: "Page/probe".into(), name: "probe".into(), label: None }]);
+    assert!(!carrying(), "taken once");
+}

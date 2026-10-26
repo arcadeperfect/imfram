@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use egui::{vec2, Align2, DragAndDrop, Id, Rect, Sense, Ui};
 use serde::{Deserialize, Serialize};
 
-pub use source::{armed, harvesting, item, item_with, pick_mode, scope, set_pick_mode, ItemAt, Pick};
+pub use source::{armed, carrying, harvesting, item, item_with, pick_mode, scope, set_pick_mode, set_screen_origin, ItemAt, Pick};
 use source::Slot;
 
 /// Width of a row's grip.
@@ -232,12 +232,26 @@ impl Composer {
             if ui.input(|i| i.pointer.any_released()) {
                 if let Some(p) = DragAndDrop::take_payload::<Pick>(ui.ctx()) {
                     self.insert(to, Entry { key: p.key.clone(), name: p.name.clone(), label: None });
+                    source::end_carry();
                     changed = true;
                 } else if let Some(m) = DragAndDrop::take_payload::<Moving>(ui.ctx()) {
                     if to != m.index && to != m.index + 1 {
                         self.reorder(m.index, to);
                         changed = true;
                     }
+                }
+            }
+        }
+        // A control carried from another window: dropped where it was let go.
+        if picked.is_none() && moved.is_none() {
+            if let Some((p, at, released)) = source::carried_here(ui.ctx()).filter(|(_, at, _)| area.contains(*at)) {
+                let to = rows.iter().position(|r| at.y < r.center().y).unwrap_or(rows.len());
+                let y = rows.get(to).map_or_else(|| rows.last().map_or(tail.top(), |r| r.bottom()), |r| r.top());
+                ui.painter().hline(area.x_range(), y, (2.0, ui.visuals().selection.stroke.color));
+                if released {
+                    self.insert(to, Entry { key: p.key, name: p.name, label: None });
+                    source::end_carry();
+                    changed = true;
                 }
             }
         }

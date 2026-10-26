@@ -333,3 +333,44 @@ fn an_alt_drag_lands_in_a_composer_in_another_window() {
     assert_eq!(c.entries, vec![Entry { key: "Page/probe".into(), name: "probe".into(), label: None }]);
     assert!(!carrying(), "taken once");
 }
+
+#[test]
+fn a_control_in_a_scroll_area_is_reached() {
+    let ctx = egui::Context::default();
+    let mut c = Composer::default();
+    c.push(Entry { key: "Sim/water".into(), name: "water".into(), label: None });
+    let mut hit = false;
+    for _ in 0..3 {
+        frame(&ctx, vec![], Modifiers::NONE, |ui| {
+            hit = false;
+            c.show(ui, |ui| {
+                scope(ui, "Sim", |ui| {
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        ui.add_space(400.0);
+                        item(ui, "water", |ui| {
+                            if ui.clip_rect().is_positive() {
+                                hit = true;
+                            }
+                        });
+                    });
+                });
+            });
+        });
+    }
+    assert!(hit, "drawn into its slot from inside a scroll area");
+}
+
+#[test]
+fn a_second_copy_of_a_panel_keys_its_controls_as_the_first() {
+    let ctx = egui::Context::default();
+    let mut keys = Vec::new();
+    frame(&ctx, vec![], Modifiers::NONE, |ui| {
+        for _ in 0..2 {
+            scope(ui, "Sim", |ui| {
+                item_with(ui, "water", |_, at| keys.push(at.key.to_owned()));
+                item_with(ui, "water", |_, at| keys.push(at.key.to_owned()));
+            });
+        }
+    });
+    assert_eq!(keys, ["Sim/water", "Sim/water#2", "Sim/water", "Sim/water#2"]);
+}

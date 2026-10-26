@@ -153,12 +153,18 @@ pub struct GestureFilter {
 
 impl GestureFilter {
     pub fn process(&mut self, raw: &mut egui::RawInput, claims: impl Fn(PointerButton, Modifiers) -> bool) {
+        self.process_at(raw, |_, button, mods| claims(button, mods));
+    }
+
+    /// [`process`](Self::process), `claims` told where the press is too:
+    /// a canvas that shares its window with panels claims only over itself.
+    pub fn process_at(&mut self, raw: &mut egui::RawInput, claims: impl Fn(egui::Pos2, PointerButton, Modifiers) -> bool) {
         self.presses.clear();
         self.releases.clear();
         let slot = |b: PointerButton| b as usize;
         raw.events.retain(|e| match e {
             egui::Event::PointerButton { pos, button, pressed: true, modifiers } => {
-                if claims(*button, *modifiers) {
+                if claims(*pos, *button, *modifiers) {
                     self.held[slot(*button)] = true;
                     self.presses.push(Press { button: *button, pos: *pos, modifiers: *modifiers });
                     false
@@ -270,5 +276,16 @@ mod tests {
         assert!(fx > 1.0 && (fy - 1.0).abs() < 1e-6, "right stretches time only");
         let (fx, fy) = drag_zoom_xy(egui::vec2(0.0, -80.0));
         assert!(fy > 1.0 && (fx - 1.0).abs() < 1e-6, "up stretches value only");
+    }
+
+    #[test]
+    fn a_press_outside_the_canvas_is_left_to_the_panels() {
+        let canvas = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 100.0));
+        let press = |x: f32| Event::PointerButton { pos: egui::pos2(x, 50.0), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::ALT };
+        let mut raw = egui::RawInput { events: vec![press(50.0), press(150.0)], ..Default::default() };
+        let mut f = GestureFilter::default();
+        f.process_at(&mut raw, |pos, b, m| canvas.contains(pos) && drag_nav(b, m).is_some());
+        assert_eq!(f.presses.len(), 1, "the one over the canvas is claimed");
+        assert_eq!(raw.events.len(), 1, "the one over a panel goes on to egui");
     }
 }

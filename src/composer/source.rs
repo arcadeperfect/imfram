@@ -161,6 +161,13 @@ fn with_walk<R>(ctx: &Context, f: impl FnOnce(&mut Walk) -> R) -> R {
 pub fn scope<R>(ui: &mut Ui, name: &str, body: impl FnOnce(&mut Ui) -> R) -> R {
     let ctx = ui.ctx().clone();
     let depth = with_walk(&ctx, |w| {
+        // A panel's outermost scope counts its names from one each time it
+        // opens, so a second copy of a panel on show in the same window
+        // keys its controls as the first does (and as a harvest does).
+        if w.stack.is_empty() {
+            let prefix = format!("{name}/");
+            w.seen.retain(|k, _| !k.starts_with(&prefix));
+        }
         w.stack.push(name.to_owned());
         w.stack.len()
     });

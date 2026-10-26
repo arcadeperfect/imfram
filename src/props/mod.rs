@@ -321,7 +321,8 @@ impl<'a> Sheet<'a> {
         let (label_w, rgb_spec) = (self.label_w, self.rgb_spec);
         let mut events = Vec::new();
         // Every row can go in a composer (`crate::composer`), by its label.
-        crate::composer::item(&mut *self.ui, label, |ui| {
+        crate::composer::item_with(&mut *self.ui, label, |ui, at| {
+            let label = at.label;
             let wid = ui.id().with(("props", id));
             let row = ui.horizontal(|ui| {
                 let gap = ui.spacing().item_spacing.x;

@@ -19,7 +19,7 @@ fn a_key_is_its_scopes_then_its_name_and_repeats_count() {
     let ctx = egui::Context::default();
     let mut c = Composer::default();
     for k in ["Sky/Colours/intensity", "Sky/Colours/intensity#2", "loose"] {
-        c.push(Entry { key: k.into(), name: k.into() });
+        c.push(Entry { key: k.into(), name: k.into(), label: None });
     }
     // Drawn into a slot, a control is somewhere to be seen; drawn for
     // nothing, it is clipped to nothing.
@@ -65,7 +65,7 @@ impl Rig {
     fn new(keys: &[&str]) -> Self {
         let mut composer = Composer::default();
         for k in keys {
-            composer.push(Entry { key: (*k).into(), name: (*k).into() });
+            composer.push(Entry { key: (*k).into(), name: (*k).into(), label: None });
         }
         Self { ctx: egui::Context::default(), composer, flag: false, gain: 0.5, drawn_at: None }
     }
@@ -171,12 +171,12 @@ fn alt_drag_from_the_page_drops_a_control_in() {
     }
     let changed = probe(&mut rig, vec![press(to, false)]);
     assert!(changed);
-    assert_eq!(rig.composer.entries, vec![Entry { key: "Page/probe".into(), name: "probe".into() }]);
+    assert_eq!(rig.composer.entries, vec![Entry { key: "Page/probe".into(), name: "probe".into(), label: None }]);
 }
 
 #[test]
 fn insert_and_reorder_keep_one_of_each() {
-    let e = |k: &str| Entry { key: k.into(), name: k.into() };
+    let e = |k: &str| Entry { key: k.into(), name: k.into(), label: None };
     let mut c = Composer::default();
     for k in ["a", "b", "c"] {
         assert!(c.push(e(k)));
@@ -194,7 +194,7 @@ fn insert_and_reorder_keep_one_of_each() {
 #[test]
 fn a_composer_round_trips_through_json() {
     let mut c = Composer::default();
-    c.push(Entry { key: "Sky/Gradient/gradient follow".into(), name: "gradient follow".into() });
+    c.push(Entry { key: "Sky/Gradient/gradient follow".into(), name: "gradient follow".into(), label: None });
     let s = serde_json::to_string(&c).unwrap();
     assert_eq!(serde_json::from_str::<Composer>(&s).unwrap(), c);
 }
@@ -206,7 +206,7 @@ fn a_composer_round_trips_through_json() {
 fn shot() {
     let mut c = Composer::default();
     for (k, n) in [("Page/Light/sun", "sun"), ("Page/Sky/sky brightness", "sky brightness"), ("Page/Light/Shadows", "Shadows"), ("Page/Old/gone", "gone")] {
-        c.push(Entry { key: k.into(), name: n.into() });
+        c.push(Entry { key: k.into(), name: n.into(), label: None });
     }
     let (mut sun, mut sky, mut soft, mut shadows) = (0.8, 1.2, 0.3, true);
     let page = |ui: &mut Ui, sun: &mut f32, sky: &mut f32, soft: &mut f32, shadows: &mut bool| {
@@ -236,7 +236,7 @@ fn a_hidden_run_of_a_page_leaves_its_props_rects_alone() {
     use crate::props::{rects, Sheet};
     let ctx = egui::Context::default();
     let mut c = Composer::default();
-    c.push(Entry { key: "Page/gain".into(), name: "gain".into() });
+    c.push(Entry { key: "Page/gain".into(), name: "gain".into(), label: None });
     let mut v = 0.5;
     let mut page = None;
     for _ in 0..2 {
@@ -260,4 +260,28 @@ fn a_hidden_run_of_a_page_leaves_its_props_rects_alone() {
     let after = rects(&ctx, egui::Id::new("gain")).map(|r| r.row);
     assert!(page.is_some());
     assert_eq!(page, after, "the composer's run moved the page row's rect");
+}
+
+#[test]
+fn a_renamed_row_hands_its_control_the_new_label() {
+    let ctx = egui::Context::default();
+    let mut c = Composer::default();
+    c.push(Entry { key: "Page/gain".into(), name: "gain".into(), label: Some("boost".into()) });
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        frame(&ctx, vec![], Modifiers::NONE, |ui| {
+            seen.clear();
+            item_with(ui, "outside", |_, at| seen.push(("page", at.label.to_owned())));
+            c.show(ui, |ui| {
+                scope(ui, "Page", |ui| {
+                    item_with(ui, "gain", |ui, at| {
+                        if ui.clip_rect().is_positive() {
+                            seen.push(("slot", at.label.to_owned()));
+                        }
+                    });
+                });
+            });
+        });
+    }
+    assert_eq!(seen, vec![("page", "outside".to_owned()), ("slot", "boost".to_owned())]);
 }

@@ -48,6 +48,6 @@ fn in_pick_mode_a_click_on_a_page_control_adds_it_and_leaves_its_value_alone() {
     run(vec![press(p, false)], &mut c, &mut gain, &mut at);
     run(vec![], &mut c, &mut gain, &mut at);
     composer::set_pick_mode(false);
-    assert_eq!(c.entries, vec![Entry { key: "Page/gain".into(), name: "gain".into() }]);
+    assert_eq!(c.entries, vec![Entry { key: "Page/gain".into(), name: "gain".into(), label: None }]);
     assert_eq!(gain, 0.5, "the pick click must not also set the slider");
 }

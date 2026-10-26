@@ -63,8 +63,8 @@ pub fn switched(ui: &mut Ui, on: &mut bool, name: &str, hint: &str, start: Start
     let mut now = *on;
     let header = |ui: &mut Ui| {
         // (Its switch can go in a composer, under the group's own path.)
-        composer::item(ui, name, |ui| {
-            let switch = ui.checkbox(&mut now, egui::RichText::new(name).strong());
+        composer::item_with(ui, name, |ui, at| {
+            let switch = ui.checkbox(&mut now, egui::RichText::new(at.label).strong());
             if !hint.is_empty() {
                 switch.on_hover_text(hint);
             }

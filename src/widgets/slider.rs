@@ -51,19 +51,23 @@ pub struct Row {
 /// A float slider with a fixed range. True when the value changed.
 /// `hint` is its hover text ("" for none).
 /// One with a label can go in a composer (`crate::composer`), by its label.
+/// A labelled one's range can be re-aimed (`super::range`: A shows every
+/// slider's bound fields, shift over a rail shows its own).
 pub fn slider(ui: &mut Ui, value: &mut f32, range: (f32, f32), text: &str, log: bool, hint: &str) -> bool {
-    let mut body = |ui: &mut Ui| {
+    if text.is_empty() {
         let row = ui.scope(|ui| row(ui, value, range, text, log));
         if !hint.is_empty() {
             row.response.on_hover_text(hint);
         }
-        row.inner.changed
-    };
-    if text.is_empty() {
-        body(ui)
-    } else {
-        crate::composer::item(ui, text, body)
+        return row.inner.changed;
     }
+    crate::composer::item_with(ui, text, |ui, at| {
+        let out = ui.scope(|ui| super::range::keyed_row(ui, at.key, value, range, at.label, log));
+        if !hint.is_empty() {
+            out.response.on_hover_text(hint);
+        }
+        out.inner.value_changed
+    })
 }
 
 pub fn row(ui: &mut Ui, value: &mut f32, (lo, hi): (f32, f32), text: &str, log: bool) -> Row {

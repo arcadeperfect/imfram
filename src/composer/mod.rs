@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use egui::{vec2, Align2, DragAndDrop, Id, Rect, Sense, Ui};
 use serde::{Deserialize, Serialize};
 
-pub use source::{armed, harvesting, item, pick_mode, scope, set_pick_mode, Pick};
+pub use source::{armed, harvesting, item, item_with, pick_mode, scope, set_pick_mode, ItemAt, Pick};
 use source::Slot;
 
 /// Width of a row's grip.
@@ -58,6 +58,10 @@ pub struct Entry {
     pub key: String,
     /// Shown while the control is not there.
     pub name: String,
+    /// What the user renamed the row to (right-click its grip), shown in
+    /// place of the control's own name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// A composer's rows, in order. Save it (serde) to keep a view.
@@ -136,7 +140,7 @@ impl Composer {
             }
         });
         for p in source::take_picked() {
-            changed |= self.push(Entry { key: p.key, name: p.name });
+            changed |= self.push(Entry { key: p.key, name: p.name, label: None });
         }
 
         // The rows, laid out at their last heights; the controls go in after.
@@ -145,6 +149,7 @@ impl Composer {
         let mut rows: Vec<Rect> = Vec::with_capacity(self.entries.len());
         let mut close = None;
         let mut moving = None;
+        let mut renamed = None;
         for (i, e) in self.entries.iter().enumerate() {
             let h = ui.data(|d| d.get_temp::<f32>(height_id(&e.key))).unwrap_or(FIRST_H);
             let row = ui.horizontal(|ui| {
@@ -155,7 +160,12 @@ impl Composer {
                 (grip, g, slot, x)
             });
             let (grip, g, slot, x) = row.inner;
-            let g = g.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text(&e.key);
+            let g = g.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text(format!("{}\nright-click: rename", e.key));
+            g.context_menu(|ui| {
+                if let Some(label) = rename_menu(ui, me.with(("rename", &e.key)), e) {
+                    renamed = Some((i, label));
+                }
+            });
             let c = if g.hovered() || g.dragged() { ui.visuals().strong_text_color() } else { ui.visuals().weak_text_color() };
             for (dx, dy) in [(-2.5, -4.0), (2.5, -4.0), (-2.5, 0.0), (2.5, 0.0), (-2.5, 4.0), (2.5, 4.0)] {
                 ui.painter().circle_filled(grip.center() + vec2(dx, dy), 1.2, c);
@@ -171,7 +181,7 @@ impl Composer {
             }
             slots.insert(
                 e.key.clone(),
-                Slot { id: me.with(("slot", &e.key)), rect: slot, layer: ui.layer_id(), clip: ui.clip_rect(), style: ui.style().clone() },
+                Slot { id: me.with(("slot", &e.key)), rect: slot, layer: ui.layer_id(), clip: ui.clip_rect(), style: ui.style().clone(), label: e.label.clone() },
             );
             rows.push(row.response.rect);
         }
@@ -201,7 +211,8 @@ impl Composer {
                 None => {
                     let at = egui::pos2(row.left() + GRIP_W + ui.spacing().item_spacing.x, row.center().y);
                     let font = egui::TextStyle::Body.resolve(ui.style());
-                    ui.painter().text(at, Align2::LEFT_CENTER, format!("{} (not here now)", e.name), font, ui.visuals().weak_text_color());
+                    let name = e.label.as_deref().unwrap_or(&e.name);
+                    ui.painter().text(at, Align2::LEFT_CENTER, format!("{name} (not here now)"), font, ui.visuals().weak_text_color());
                 }
             }
         }
@@ -220,7 +231,7 @@ impl Composer {
             ui.painter().hline(area.x_range(), y, (2.0, ui.visuals().selection.stroke.color));
             if ui.input(|i| i.pointer.any_released()) {
                 if let Some(p) = DragAndDrop::take_payload::<Pick>(ui.ctx()) {
-                    self.insert(to, Entry { key: p.key.clone(), name: p.name.clone() });
+                    self.insert(to, Entry { key: p.key.clone(), name: p.name.clone(), label: None });
                     changed = true;
                 } else if let Some(m) = DragAndDrop::take_payload::<Moving>(ui.ctx()) {
                     if to != m.index && to != m.index + 1 {
@@ -230,10 +241,48 @@ impl Composer {
                 }
             }
         }
+        if let Some((i, label)) = renamed {
+            self.entries[i].label = label;
+            changed = true;
+        }
         if let Some(i) = close {
             self.entries.remove(i);
             changed = true;
         }
         changed
     }
+}
+
+/// A row's rename menu: a field holding its label (Enter or the button
+/// takes it; empty, or "own name", goes back to the control's own).
+/// `Some` when the row's label changes.
+fn rename_menu(ui: &mut Ui, id: Id, e: &Entry) -> Option<Option<String>> {
+    let mut text: String = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| e.label.clone().unwrap_or_else(|| e.name.clone()));
+    ui.label("label");
+    let field = ui.text_edit_singleline(&mut text);
+    if !field.has_focus() && !field.lost_focus() && ui.data(|d| d.get_temp::<bool>(id.with("focused"))).is_none() {
+        field.request_focus();
+        ui.data_mut(|d| d.insert_temp(id.with("focused"), true));
+    }
+    let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    let mut out = None;
+    ui.horizontal(|ui| {
+        if ui.button("rename").clicked() || enter {
+            let t = text.trim();
+            out = Some((!t.is_empty() && t != e.name).then(|| t.to_owned()));
+        }
+        if e.label.is_some() && ui.button("own name").on_hover_text(format!("back to \"{}\"", e.name)).clicked() {
+            out = Some(None);
+        }
+    });
+    if out.is_some() {
+        ui.data_mut(|d| {
+            d.remove::<String>(id);
+            d.remove::<bool>(id.with("focused"));
+        });
+        ui.close();
+    } else {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    }
+    out.filter(|l| *l != e.label)
 }

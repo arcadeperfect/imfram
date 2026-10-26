@@ -51,6 +51,8 @@ pub(super) struct Slot {
     pub layer: LayerId,
     pub clip: Rect,
     pub style: Arc<Style>,
+    /// The name the user gave the row, shown in place of the control's own.
+    pub label: Option<String>,
 }
 
 #[derive(Default)]
@@ -151,6 +153,21 @@ enum Here {
 /// Drawn as usual; with Alt held, or in pick mode, it lights on hover and
 /// can be dragged into a composer (or, in pick mode, clicked).
 pub fn item<R>(ui: &mut Ui, name: &str, body: impl FnOnce(&mut Ui) -> R) -> R {
+    item_with(ui, name, |ui, _| body(ui))
+}
+
+/// Where an [`item`] is: its key, and the text it should show (its own
+/// name, or the name the user gave its row in a composer).
+#[derive(Clone, Copy, Debug)]
+pub struct ItemAt<'a> {
+    pub key: &'a str,
+    pub label: &'a str,
+}
+
+/// [`item`], with the control told its key and its label: a control that
+/// draws its name should draw `label`, so a renamed composer row reads as
+/// the user named it.
+pub fn item_with<R>(ui: &mut Ui, name: &str, body: impl FnOnce(&mut Ui, ItemAt) -> R) -> R {
     let ctx = ui.ctx().clone();
     let key = next_key(&ctx, name);
     let here = with_walk(&ctx, |w| match &w.harvest {
@@ -158,15 +175,16 @@ pub fn item<R>(ui: &mut Ui, name: &str, body: impl FnOnce(&mut Ui) -> R) -> R {
         Some(h) => h.slots.get(&key).cloned().map_or(Here::Hidden, Here::Slot),
     });
     match here {
-        Here::Hidden => body(ui),
+        Here::Hidden => body(ui, ItemAt { key: &key, label: name }),
         Here::Slot(slot) => {
+            let label = slot.label.clone().unwrap_or_else(|| name.to_owned());
             let mut sub = Ui::new(ctx.clone(), slot.id, UiBuilder::new().layer_id(slot.layer).max_rect(slot.rect).style(slot.style));
             sub.set_clip_rect(slot.clip);
             if !ui.is_enabled() {
                 sub.disable();
             }
             crate::widgets::group::fit_sliders(&mut sub);
-            let r = body(&mut sub);
+            let r = body(&mut sub, ItemAt { key: &key, label: &label });
             let h = sub.min_rect().height();
             with_walk(&ctx, |w| {
                 if let Some(hv) = w.harvest.as_mut() {
@@ -176,7 +194,7 @@ pub fn item<R>(ui: &mut Ui, name: &str, body: impl FnOnce(&mut Ui) -> R) -> R {
             r
         }
         Here::Normal => {
-            let r = ui.scope(body);
+            let r = ui.scope(|ui| body(ui, ItemAt { key: &key, label: name }));
             grab(ui, key, name, r.response.rect);
             r.inner
         }

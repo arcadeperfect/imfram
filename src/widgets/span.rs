@@ -159,7 +159,10 @@ pub fn span_bar(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, span: &
     out.rect = rect;
     out.view = view;
 
-    if resp.drag_started() {
+    // Only a plain or shift/ctrl LEFT drag takes the span: middle and alt
+    // drags are the caller's navigation (pan / zoom the bar).
+    let nav_chord = ui.input(|i| i.modifiers.alt);
+    if resp.drag_started_by(egui::PointerButton::Primary) && !nav_chord {
         // From where the button went DOWN: drag_started fires past the
         // threshold, by which time the pointer has left the edge.
         if let Some(p0) = ui.input(|i| i.pointer.press_origin()) {

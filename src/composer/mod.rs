@@ -27,10 +27,16 @@
 //! if app.composer.show(ui, |ui| pages(ui, app)) { /* save app.composer */ }
 //! ```
 //!
+//! A divider (`+ divider` in the header) is a row of its own: a label
+//! and a line, to split the rows into sections; it is renamed, moved and
+//! taken out like any row. A [`Library`] keeps several named composers
+//! (layouts) and switches between them.
+//!
 //! A control the sources did not reach this frame (its page hides it now,
 //! or the code lost it) keeps its row, greyed, until it comes back or is
 //! taken out.
 
+mod library;
 mod source;
 #[cfg(test)]
 mod tests;
@@ -40,6 +46,7 @@ use std::collections::HashMap;
 use egui::{vec2, Align2, DragAndDrop, Id, Rect, Sense, Ui};
 use serde::{Deserialize, Serialize};
 
+pub use library::{Layout, Library};
 pub use source::{armed, carrying, harvesting, item, item_with, pick_mode, scope, set_pick_mode, set_screen_origin, ItemAt, Pick};
 use source::Slot;
 
@@ -49,6 +56,10 @@ const GRIP_W: f32 = 14.0;
 const CLOSE_W: f32 = 18.0;
 /// Height a row is given before its control has been drawn once.
 const FIRST_H: f32 = 20.0;
+/// Height of a divider row.
+const DIVIDER_H: f32 = 22.0;
+/// What a divider's key starts with (no control's key does).
+pub const DIVIDER: &str = "~divider/";
 /// Height of the drop area under the rows (all of it, when there are none).
 const TAIL_H: f32 = 28.0;
 
@@ -62,6 +73,18 @@ pub struct Entry {
     /// place of the control's own name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+impl Entry {
+    /// A row that is a section's label and line, not a control.
+    pub fn is_divider(&self) -> bool {
+        self.key.starts_with(DIVIDER)
+    }
+
+    /// What the row shows: its label, else its own name.
+    pub fn title(&self) -> &str {
+        self.label.as_deref().unwrap_or(&self.name)
+    }
 }
 
 /// A composer's rows, in order. Save it (serde) to keep a view.
@@ -123,6 +146,14 @@ impl Composer {
         true
     }
 
+    /// Add a divider at the end, labelled `label`; its key.
+    pub fn push_divider(&mut self, label: &str) -> String {
+        let n = (1..).find(|n| !self.contains(&format!("{DIVIDER}{n}"))).unwrap_or(1);
+        let key = format!("{DIVIDER}{n}");
+        self.entries.push(Entry { key: key.clone(), name: "section".into(), label: Some(label.to_owned()) });
+        key
+    }
+
     pub fn remove(&mut self, key: &str) -> bool {
         let n = self.entries.len();
         self.entries.retain(|e| e.key != key);
@@ -150,6 +181,11 @@ impl Composer {
             if ui.toggle_value(&mut on, "pick").on_hover_text("on: click a control anywhere to add it here (or hold Alt and drag one in, any time)").changed() {
                 set_pick_mode(on);
             }
+            if ui.small_button("+ divider").on_hover_text("a labelled line to split the rows into sections (right-click its grip or label to rename it)").clicked() {
+                let n = self.entries.iter().filter(|e| e.is_divider()).count() + 1;
+                self.push_divider(&format!("section {n}"));
+                changed = true;
+            }
             if !self.entries.is_empty() && ui.small_button("clear").on_hover_text("take every row out").clicked() {
                 self.entries.clear();
                 changed = true;
@@ -167,22 +203,33 @@ impl Composer {
         let mut moving = None;
         let mut renamed = None;
         for (i, e) in self.entries.iter().enumerate() {
-            let h = ui.data(|d| d.get_temp::<f32>(height_id(&e.key))).unwrap_or(FIRST_H);
+            let divider = e.is_divider();
+            let h = if divider { DIVIDER_H } else { ui.data(|d| d.get_temp::<f32>(height_id(&e.key))).unwrap_or(FIRST_H) };
             let row = ui.horizontal(|ui| {
                 // (click too: a right-click is how a row is renamed)
                 let (grip, g) = ui.allocate_exact_size(vec2(GRIP_W, h), Sense::click_and_drag());
                 let w = (ui.available_width() - CLOSE_W - ui.spacing().item_spacing.x).max(40.0);
-                let (slot, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
+                let (slot, s) = ui.allocate_exact_size(vec2(w, h), if divider { Sense::click() } else { Sense::hover() });
                 let x = ui.add_sized(vec2(CLOSE_W, h.min(FIRST_H)), egui::Button::new("×").frame(false)).on_hover_text("take it out");
-                (grip, g, slot, x)
+                (grip, g, slot, s, x)
             });
-            let (grip, g, slot, x) = row.inner;
-            let g = g.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text(format!("{}\nright-click: rename", e.key));
+            let (grip, g, slot, s, x) = row.inner;
+            let tip = if divider { "divider\nright-click: rename".to_owned() } else { format!("{}\nright-click: rename", e.key) };
+            let g = g.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text(tip);
+            let menu_id = me.with(("rename", &e.key));
             g.context_menu(|ui| {
-                if let Some(label) = rename_menu(ui, me.with(("rename", &e.key)), e) {
+                if let Some(label) = rename_menu(ui, menu_id, e) {
                     renamed = Some((i, label));
                 }
             });
+            if divider {
+                s.on_hover_text("right-click: rename").context_menu(|ui| {
+                    if let Some(label) = rename_menu(ui, menu_id, e) {
+                        renamed = Some((i, label));
+                    }
+                });
+                paint_divider(ui, slot, e.title());
+            }
             let c = if g.hovered() || g.dragged() { ui.visuals().strong_text_color() } else { ui.visuals().weak_text_color() };
             for (dx, dy) in [(-2.5, -4.0), (2.5, -4.0), (-2.5, 0.0), (2.5, 0.0), (-2.5, 4.0), (2.5, 4.0)] {
                 ui.painter().circle_filled(grip.center() + vec2(dx, dy), 1.2, c);
@@ -196,10 +243,12 @@ impl Composer {
             if x.clicked() {
                 close = Some(i);
             }
-            slots.insert(
+            if !divider {
+                slots.insert(
                 e.key.clone(),
                 Slot { id: me.with(("slot", &e.key)), rect: slot, layer: ui.layer_id(), clip: ui.clip_rect(), style: ui.style().clone(), label: e.label.clone() },
-            );
+                );
+            }
             rows.push(row.response.rect);
         }
         let grips: Vec<(String, Rect)> = self.entries.iter().zip(&rows).map(|(e, r)| (e.key.clone(), Rect::from_min_size(r.min, vec2(GRIP_W, r.height())))).collect();
@@ -222,7 +271,7 @@ impl Composer {
 
         // Draw the controls into their rows.
         let drawn = if slots.is_empty() { HashMap::new() } else { source::harvest(ui, slots, sources) };
-        for (e, row) in self.entries.iter().zip(&rows) {
+        for (e, row) in self.entries.iter().zip(&rows).filter(|(e, _)| !e.is_divider()) {
             match drawn.get(&e.key) {
                 Some(&h) => {
                     let was = ui.data(|d| d.get_temp::<f32>(height_id(&e.key)));
@@ -287,6 +336,17 @@ impl Composer {
             changed = true;
         }
         changed
+    }
+}
+
+/// A divider in its slot: its label, then a line to the slot's end.
+fn paint_divider(ui: &Ui, slot: Rect, label: &str) {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let colour = ui.visuals().strong_text_color();
+    let text = ui.painter().text(egui::pos2(slot.left(), slot.center().y), Align2::LEFT_CENTER, label, font, colour);
+    let from = if label.is_empty() { slot.left() } else { text.right() + 6.0 };
+    if from < slot.right() {
+        ui.painter().hline(from..=slot.right(), slot.center().y, ui.visuals().widgets.noninteractive.bg_stroke);
     }
 }
 

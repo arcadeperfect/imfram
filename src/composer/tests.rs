@@ -374,3 +374,31 @@ fn a_second_copy_of_a_panel_keys_its_controls_as_the_first() {
     });
     assert_eq!(keys, ["Sim/water", "Sim/water#2", "Sim/water", "Sim/water#2"]);
 }
+
+#[test]
+fn a_divider_is_a_row_of_its_own_and_takes_no_control() {
+    let ctx = egui::Context::default();
+    let mut c = Composer::default();
+    let key = c.push_divider("sky");
+    c.push(Entry { key: "loose".into(), name: "loose".into(), label: None });
+    assert!(c.entries[0].is_divider() && c.entries[0].title() == "sky");
+    let mut hits = 0;
+    frame(&ctx, vec![], Modifiers::NONE, |ui| {
+        hits = 0;
+        c.show(ui, |ui| {
+            item(ui, "loose", |ui| {
+                if ui.clip_rect().is_positive() {
+                    hits += 1;
+                }
+            });
+        });
+    });
+    assert_eq!(hits, 1, "the control still lands in its row");
+    let grips = grip_rects(&ctx);
+    assert_eq!(grips.len(), 2);
+    assert_eq!(grips[0].0, key);
+    assert!(grips[0].1.bottom() <= grips[1].1.top() + 0.5, "the divider sits above");
+    c.reorder(0, 2);
+    assert_eq!(c.entries[1].key, key, "moved like any row");
+    assert_eq!(c.push_divider("b"), format!("{DIVIDER}2"));
+}

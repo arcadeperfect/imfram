@@ -66,6 +66,8 @@ pub struct SpanOut {
     pub delta: i64,
     /// A double-click on the bar.
     pub double_clicked: bool,
+    /// A plain click (no drag): the frame under it, continuous.
+    pub clicked: Option<f64>,
 }
 
 impl Default for SpanOut {
@@ -78,6 +80,7 @@ impl Default for SpanOut {
             shift_slide: false,
             delta: 0,
             double_clicked: false,
+            clicked: None,
         }
     }
 }
@@ -158,6 +161,9 @@ pub fn span_bar(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, span: &
     let view = press.map(|p| p.view).unwrap_or_else(|| opts.view.unwrap_or_else(|| fit(*span, opts.solid)));
     out.rect = rect;
     out.view = view;
+    if resp.clicked() {
+        out.clicked = resp.interact_pointer_pos().map(|p| frame_at(rect, view, p.x));
+    }
 
     // Only a plain or shift/ctrl LEFT drag takes the span: middle and alt
     // drags are the caller's navigation (pan / zoom the bar).

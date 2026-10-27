@@ -77,6 +77,22 @@ struct Moving {
     index: usize,
 }
 
+fn grips_id() -> Id {
+    Id::new("imfram-composer-grips")
+}
+
+/// Each row's key and its grip, as last drawn in this window (scripted UI
+/// checks read it).
+pub fn grip_rects(ctx: &egui::Context) -> Vec<(String, Rect)> {
+    ctx.data(|d| d.get_temp(grips_id())).unwrap_or_default()
+}
+
+/// Where the control `key` was last drawn in this window, while armed
+/// (Alt held, or pick mode): where to start a drag into a composer.
+pub fn grab_rect(ctx: &egui::Context, key: &str) -> Option<Rect> {
+    ctx.read_response(Id::new(("composer-grab", key))).map(|r| r.rect)
+}
+
 fn height_id(key: &str) -> Id {
     Id::new(("composer-row-h", key))
 }
@@ -153,7 +169,8 @@ impl Composer {
         for (i, e) in self.entries.iter().enumerate() {
             let h = ui.data(|d| d.get_temp::<f32>(height_id(&e.key))).unwrap_or(FIRST_H);
             let row = ui.horizontal(|ui| {
-                let (grip, g) = ui.allocate_exact_size(vec2(GRIP_W, h), Sense::drag());
+                // (click too: a right-click is how a row is renamed)
+                let (grip, g) = ui.allocate_exact_size(vec2(GRIP_W, h), Sense::click_and_drag());
                 let w = (ui.available_width() - CLOSE_W - ui.spacing().item_spacing.x).max(40.0);
                 let (slot, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
                 let x = ui.add_sized(vec2(CLOSE_W, h.min(FIRST_H)), egui::Button::new("×").frame(false)).on_hover_text("take it out");
@@ -185,11 +202,17 @@ impl Composer {
             );
             rows.push(row.response.rect);
         }
+        let grips: Vec<(String, Rect)> = self.entries.iter().zip(&rows).map(|(e, r)| (e.key.clone(), Rect::from_min_size(r.min, vec2(GRIP_W, r.height())))).collect();
+        ui.data_mut(|d| d.insert_temp(grips_id(), grips));
+        // (The drop area runs on down the rest of the panel: a control let
+        // go anywhere under the rows goes in at the end.)
         let tail_h = if self.entries.is_empty() { TAIL_H * 2.0 } else { TAIL_H };
+        let rest = ui.available_height();
+        let tail_h = if rest.is_finite() { tail_h.max(rest) } else { tail_h };
         let (tail, _) = ui.allocate_exact_size(vec2(ui.available_width(), tail_h), Sense::hover());
         if self.entries.is_empty() {
             ui.painter().text(
-                tail.center(),
+                egui::pos2(tail.center().x, tail.top() + TAIL_H),
                 Align2::CENTER_CENTER,
                 "hold Alt and drag a control here",
                 egui::TextStyle::Body.resolve(ui.style()),

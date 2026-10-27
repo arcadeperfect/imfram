@@ -37,6 +37,8 @@ pub struct SpanOpts {
     pub max_len: Option<i64>,
     /// Label the two ends with their frame numbers.
     pub labels: bool,
+    /// The span's colour (the selection colour when unset).
+    pub color: Option<egui::Color32>,
     /// A line added to the hover text (what shift does, say).
     pub hint: Option<&'static str>,
 }
@@ -193,13 +195,13 @@ pub fn span_bar(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, span: &
         painter.rect_filled(r, 1.0, v.widgets.inactive.bg_fill);
     }
     let sr = band(span.0, span.1);
-    let sel = v.selection.bg_fill;
+    let sel = opts.color.unwrap_or(v.selection.bg_fill);
     painter.rect_filled(sr, 2.0, sel.gamma_multiply(0.55));
     painter.rect_stroke(sr, 2.0, Stroke::new(1.0, sel), egui::StrokeKind::Inside);
     // The ends: a bar each, brighter when held or hovered.
     for (g, x) in [(Grab::Lo, sr.min.x), (Grab::Hi, sr.max.x)] {
         let hot = hover == Some(g);
-        let c = if hot { v.strong_text_color() } else { v.selection.stroke.color };
+        let c = if hot { v.strong_text_color() } else { sel.lerp_to_gamma(egui::Color32::WHITE, 0.45) };
         let x = if g == Grab::Lo { x + 1.5 } else { x - 1.5 };
         painter.line_segment([pos2(x, rect.min.y + 1.0), pos2(x, rect.max.y - 1.0)], Stroke::new(if hot { 3.0 } else { 2.0 }, c));
     }

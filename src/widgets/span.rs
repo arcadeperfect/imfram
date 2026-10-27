@@ -50,8 +50,12 @@ pub enum Grab {
     Body,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct SpanOut {
+    /// Where the bar was drawn, and the frames it spans: with [`x_of`], a
+    /// caller can draw against the bar (lines from one bar to another).
+    pub rect: Rect,
+    pub view: (i64, i64),
     /// The span moved this frame.
     pub changed: bool,
     /// What is being dragged, if anything.
@@ -62,6 +66,20 @@ pub struct SpanOut {
     pub delta: i64,
     /// A double-click on the bar.
     pub double_clicked: bool,
+}
+
+impl Default for SpanOut {
+    fn default() -> Self {
+        Self {
+            rect: Rect::NOTHING,
+            view: (0, 0),
+            changed: false,
+            grab: None,
+            shift_slide: false,
+            delta: 0,
+            double_clicked: false,
+        }
+    }
 }
 
 /// The press, kept in egui memory for the life of a drag.
@@ -138,6 +156,8 @@ pub fn span_bar(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, span: &
     let press: Option<Press> = ui.data(|d| d.get_temp(id));
     // Frozen while a drag runs: the caller may re-fit to the new span.
     let view = press.map(|p| p.view).unwrap_or_else(|| opts.view.unwrap_or_else(|| fit(*span, opts.solid)));
+    out.rect = rect;
+    out.view = view;
 
     if resp.drag_started() {
         // From where the button went DOWN: drag_started fires past the

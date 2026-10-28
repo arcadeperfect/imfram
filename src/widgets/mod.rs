@@ -10,6 +10,7 @@
 //! | `keystrip` | key caps along a view's top; hover: what each does           |
 //! | `offline`  | a global "locked" flag: settings that cannot change now      |
 //! | `span`     | an in/out span on a bar: drag its ends, slide it whole       |
+//! | `ratiolock`| a padlock between paired values; locked, edits keep the ratio |
 //!
 //! Every float slider goes through `slider`, so the drag rates work
 //! everywhere.
@@ -19,6 +20,7 @@ pub mod keystrip;
 pub mod offline;
 pub mod range;
 pub mod rate;
+pub mod ratiolock;
 pub mod slider;
 pub mod span;
 pub mod tip;

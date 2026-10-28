@@ -8,6 +8,7 @@
 //! | `tiltmenu`    | wobble | the menubar's swung dropdowns                                 |
 //! | `hudkeys`     | wobble | hotkey caps fanned along a view's top                         |
 //! | `nav`         | both   | Blender-style pan / zoom classifiers for any 2D canvas        |
+//! | `view3d`      | wobble | a 3D view's orbiting eye: Blender's hands, numpad views, grid, gizmo |
 //! | `widgets`     | graav  | sliders with drag rates, folding groups, row tooltips, key strips |
 //! | `canvas`      | new    | a canvas for vector, pictures, video and notes: Blender hands, G/R/S, a stack |
 //! | `nodeview`    | graav  | a node canvas for any graph: wires, magnet, splice, dots, stretch, search, tidy |
@@ -68,6 +69,7 @@ pub mod rgbslider;
 pub mod snapshot;
 pub mod textedit;
 pub mod tiltmenu;
+pub mod view3d;
 pub mod widgets;
 
 #[cfg(not(target_arch = "wasm32"))]

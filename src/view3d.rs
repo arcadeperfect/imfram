@@ -507,6 +507,363 @@ pub fn gizmo(ui: &mut egui::Ui, at: Pos2, radius: f32, o: &mut Orbit, style: &St
     *o != before
 }
 
+impl Orbit {
+    /// The world ray under a screen point: (the eye, a unit direction).
+    pub fn ray(&self, at: Pos2, rect: Rect) -> (V3, V3) {
+        let f = self.focal_px(rect.size());
+        let c = rect.center();
+        let v = norm([(at.x - c.x) / f, -(at.y - c.y) / f, -1.0]);
+        (self.eye(), qrot(self.rot, v))
+    }
+
+    /// The pixels a world unit covers at `p`'s depth (0 behind the eye).
+    pub fn px_per_unit(&self, p: V3, rect: Rect) -> f32 {
+        let d = -self.to_view(p)[2];
+        if d <= NEAR {
+            0.0
+        } else {
+            self.focal_px(rect.size()) / d
+        }
+    }
+}
+
+/// A closed polygon in the world, outlined on screen and clipped to the
+/// near plane (a card, a frame).
+pub fn paint_loop(p: &egui::Painter, rect: Rect, o: &Orbit, pts: &[V3], stroke: Stroke) {
+    for i in 0..pts.len() {
+        if let Some((a, b)) = clip_segment(o, pts[i], pts[(i + 1) % pts.len()], rect) {
+            p.line_segment([a, b], stroke);
+        }
+    }
+}
+
+/// Is `at` inside the projected polygon `pts` (all in front of the eye)?
+/// Its depth (distance along the view) when it is, for picking the nearest.
+pub fn hit_loop(rect: Rect, o: &Orbit, pts: &[V3], at: Pos2) -> Option<f32> {
+    let mut scr = Vec::with_capacity(pts.len());
+    let mut depth = 0.0f32;
+    for p in pts {
+        scr.push(o.project(*p, rect)?);
+        depth += -o.to_view(*p)[2] / pts.len() as f32;
+    }
+    let mut inside = false;
+    let n = scr.len();
+    for i in 0..n {
+        let (a, b) = (scr[i], scr[(i + n - 1) % n]);
+        if (a.y > at.y) != (b.y > at.y) && at.x < (b.x - a.x) * (at.y - a.y) / (b.y - a.y) + a.x {
+            inside = !inside;
+        }
+    }
+    inside.then_some(depth)
+}
+
+/// Which manipulator the 3D view shows: Blender's move, rotate and scale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Tool {
+    #[default]
+    Move,
+    Rotate,
+    Scale,
+}
+
+/// What a manipulator drag has done so far, measured from its PRESS (so a
+/// host applies it to the pose it snapshotted then, never summing steps).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Edit {
+    /// Add this to the position.
+    Move(V3),
+    /// Turn by `angle` radians about the world `axis` (through the origin
+    /// of the manipulator): new = turn × old.
+    Rotate { axis: V3, angle: f32 },
+    /// Multiply the scale along the LOCAL axes.
+    Scale(V3),
+}
+
+/// One frame of a manipulator.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ManipOut {
+    /// Under the pointer (a click there belongs to the manipulator).
+    pub hovered: bool,
+    /// A drag began this frame: snapshot the pose now.
+    pub started: bool,
+    /// A drag is running (or ended this frame).
+    pub active: bool,
+    /// The drag ended this frame.
+    pub ended: bool,
+    pub edit: Option<Edit>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Handle {
+    Axis(usize),
+    /// Move: in the view plane. Rotate: about the view axis. Scale: all three.
+    Centre,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Grab {
+    handle: Handle,
+    press: Pos2,
+    centre: Pos2,
+    /// Move along an axis: the axis parameter at the press; in the view
+    /// plane: the plane hit at the press.
+    t0: f32,
+    hit0: V3,
+    /// Rotate: the screen angle so far (unwrapped) and last frame's.
+    turned: f32,
+    last: f32,
+    axes: [V3; 3],
+    view_back: V3,
+    /// Where the manipulator stood at the press: the maths stays there
+    /// while the host moves what it is drawn on.
+    origin: V3,
+    len: f32,
+}
+
+/// How long the manipulator's arms are on screen.
+pub const MANIP_PX: f32 = 80.0;
+
+/// Blender's object manipulators, at `origin`: move along the world axes
+/// (or in the view plane from the centre), rotate about them (or about the
+/// view axis on the white ring), scale along `local` axes (or all of them
+/// from the centre). Driven by the primary button off RAW pointer state,
+/// so it needs no widget of its own and the host's view keeps every other
+/// gesture; a press that lands on a handle is the manipulator's.
+pub fn manipulator(
+    ui: &egui::Ui,
+    rect: Rect,
+    o: &Orbit,
+    tool: Tool,
+    origin: V3,
+    local: [V3; 3],
+    style: &Style,
+) -> ManipOut {
+    let id = ui.id().with("view3d-manip");
+    let mut out = ManipOut::default();
+    let ppu = o.px_per_unit(origin, rect);
+    let Some(c) = o.project(origin, rect) else { return out };
+    if ppu <= 0.0 {
+        return out;
+    }
+    let len = MANIP_PX / ppu;
+    let world = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    let axes = if tool == Tool::Scale { local.map(norm) } else { world };
+    let back = o.axes().2;
+    let ring = |i: usize, r: f32| -> Vec<(V3, Pos2)> {
+        let (u, v) = perp(axes[i]);
+        (0..=64)
+            .filter_map(|k| {
+                let a = k as f32 / 64.0 * std::f32::consts::TAU;
+                let w = add(origin, add(scale(u, a.cos() * r), scale(v, a.sin() * r)));
+                Some((w, o.project(w, rect)?))
+            })
+            .collect()
+    };
+    let view_ring: Vec<Pos2> =
+        (0..=64).map(|k| c + Vec2::angled(k as f32 / 64.0 * std::f32::consts::TAU) * MANIP_PX * 1.2).collect();
+    let tips: Vec<Option<Pos2>> = (0..3).map(|i| o.project(add(origin, scale(axes[i], len)), rect)).collect();
+    // What is under the pointer.
+    let ptr = ui.input(|i| i.pointer.hover_pos());
+    let under = |q: Pos2| -> Option<Handle> {
+        let mut best: Option<(f32, Handle)> = None;
+        let mut take = |d: f32, h: Handle| {
+            if d < 7.0 && best.is_none_or(|b| d < b.0) {
+                best = Some((d, h));
+            }
+        };
+        match tool {
+            Tool::Move | Tool::Scale => {
+                take(q.distance(c) * 0.6, Handle::Centre);
+                for (i, t) in tips.iter().enumerate() {
+                    if let Some(t) = t {
+                        take(seg_dist(q, c + (*t - c) * 0.2, *t + (*t - c).normalized() * 6.0), Handle::Axis(i));
+                    }
+                }
+            }
+            Tool::Rotate => {
+                for i in 0..3 {
+                    let pts: Vec<Pos2> = ring(i, len).into_iter().map(|(_, p)| p).collect();
+                    take(poly_dist(q, &pts), Handle::Axis(i));
+                }
+                take(poly_dist(q, &view_ring), Handle::Centre);
+            }
+        }
+        best.map(|b| b.1)
+    };
+    let mut grab: Option<Grab> = ui.data(|d| d.get_temp(id)).flatten();
+    let hover = if grab.is_none() { ptr.and_then(under) } else { None };
+    out.hovered = hover.is_some();
+    let (pressed, down) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down()));
+    let mods = ui.input(|i| i.modifiers);
+    if pressed && !mods.alt && grab.is_none() {
+        if let (Some(h), Some(q)) = (hover, ptr) {
+            let (e, d) = o.ray(q, rect);
+            let (t0, hit0) = match h {
+                Handle::Axis(i) => (line_param(origin, axes[i], e, d), [0.0; 3]),
+                Handle::Centre => (0.0, plane_hit(origin, back, e, d).unwrap_or(origin)),
+            };
+            let a = (q - c).angle();
+            grab = Some(Grab { handle: h, press: q, centre: c, t0, hit0, turned: 0.0, last: a, axes, view_back: back, origin, len });
+            out.started = true;
+        }
+    }
+    if let Some(mut g) = grab {
+        out.active = true;
+        if let Some(q) = ui.input(|i| i.pointer.latest_pos()) {
+            let (e, d) = o.ray(q, rect);
+            out.edit = Some(match (tool, g.handle) {
+                (Tool::Move, Handle::Axis(i)) => {
+                    Edit::Move(scale(g.axes[i], line_param(g.origin, g.axes[i], e, d) - g.t0))
+                }
+                (Tool::Move, Handle::Centre) => {
+                    // The view plane through the press.
+                    let h = plane_hit(g.hit0, g.view_back, e, d).unwrap_or(g.hit0);
+                    Edit::Move(sub(h, g.hit0))
+                }
+                (Tool::Rotate, h) => {
+                    let a = (q - g.centre).angle();
+                    let mut da = a - g.last;
+                    while da > PI {
+                        da -= std::f32::consts::TAU;
+                    }
+                    while da < -PI {
+                        da += std::f32::consts::TAU;
+                    }
+                    if q.distance(g.centre) > 3.0 {
+                        g.turned += da;
+                        g.last = a;
+                    }
+                    let axis = match h {
+                        Handle::Axis(i) => g.axes[i],
+                        Handle::Centre => g.view_back,
+                    };
+                    // Screen angles run clockwise (y down); a turn about an
+                    // axis facing the eye runs anticlockwise on screen.
+                    let facing = dot(axis, g.view_back) >= 0.0;
+                    Edit::Rotate { axis, angle: if facing { -g.turned } else { g.turned } }
+                }
+                (Tool::Scale, Handle::Axis(i)) => {
+                    let tip = o.project(add(g.origin, scale(g.axes[i], g.len)), rect).unwrap_or(g.centre + Vec2::X);
+                    let dir = tip - g.centre;
+                    let l = dir.length().max(1.0);
+                    let f = 1.0 + (q - g.press).dot(dir / l) / l;
+                    let mut s = [1.0; 3];
+                    s[i] = f;
+                    Edit::Scale(s)
+                }
+                (Tool::Scale, Handle::Centre) => {
+                    let f = q.distance(g.centre) / g.press.distance(g.centre).max(4.0);
+                    Edit::Scale([f; 3])
+                }
+            });
+        }
+        if down {
+            ui.data_mut(|d| d.insert_temp(id, Some(g)));
+        } else {
+            out.ended = true;
+            ui.data_mut(|d| d.insert_temp::<Option<Grab>>(id, None));
+        }
+    }
+    // Draw.
+    let p = ui.painter_at(rect);
+    let lit = |h: Handle, col: Color32| {
+        let on = grab.map(|g| g.handle) == Some(h) || hover == Some(h);
+        if on {
+            col.lerp_to_gamma(Color32::WHITE, 0.55)
+        } else {
+            col
+        }
+    };
+    let cols = [style.x, style.y, style.z];
+    match tool {
+        Tool::Move | Tool::Scale => {
+            for (i, t) in tips.iter().enumerate() {
+                let Some(t) = *t else { continue };
+                let col = lit(Handle::Axis(i), cols[i]);
+                let dir = (t - c).normalized();
+                p.line_segment([c + (t - c) * 0.2, t], Stroke::new(2.0, col));
+                if tool == Tool::Move {
+                    let n = dir.rot90();
+                    p.add(egui::Shape::convex_polygon(
+                        vec![t + dir * 12.0, t + n * 5.0, t - n * 5.0],
+                        col,
+                        Stroke::NONE,
+                    ));
+                } else {
+                    p.rect_filled(Rect::from_center_size(t, Vec2::splat(8.0)), 0.0, col);
+                }
+            }
+            let cc = lit(Handle::Centre, Color32::from_white_alpha(200));
+            p.circle_stroke(c, 7.0, Stroke::new(1.5, cc));
+        }
+        Tool::Rotate => {
+            for i in 0..3 {
+                let col = lit(Handle::Axis(i), cols[i]);
+                let pts = ring(i, len);
+                for w in pts.windows(2) {
+                    // The far half of a ring is behind the origin: dimmer.
+                    let mid = scale(add(w[0].0, w[1].0), 0.5);
+                    let near = dot(sub(mid, origin), back) >= 0.0;
+                    let s = if near { Stroke::new(2.0, col) } else { Stroke::new(1.0, col.gamma_multiply(0.35)) };
+                    p.line_segment([w[0].1, w[1].1], s);
+                }
+            }
+            let cc = lit(Handle::Centre, Color32::from_white_alpha(170));
+            p.add(egui::Shape::line(view_ring, Stroke::new(1.5, cc)));
+        }
+    }
+    out
+}
+
+fn perp(a: V3) -> (V3, V3) {
+    let t = if a[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+    let u = norm(cross(a, t));
+    (u, cross(a, u))
+}
+
+/// The parameter along the line `o + t a` nearest the ray `e + s d`.
+fn line_param(o: V3, a: V3, e: V3, d: V3) -> f32 {
+    let w = sub(o, e);
+    let (aa, ad, dd) = (dot(a, a), dot(a, d), dot(d, d));
+    let den = aa * dd - ad * ad;
+    if den.abs() < 1e-8 {
+        return 0.0;
+    }
+    (ad * dot(w, d) - dd * dot(w, a)) / den
+}
+
+fn plane_hit(p: V3, n: V3, e: V3, d: V3) -> Option<V3> {
+    let den = dot(n, d);
+    if den.abs() < 1e-6 {
+        return None;
+    }
+    let t = dot(sub(p, e), n) / den;
+    Some(add(e, scale(d, t)))
+}
+
+fn seg_dist(q: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let ab = b - a;
+    let t = ((q - a).dot(ab) / ab.length_sq().max(1e-6)).clamp(0.0, 1.0);
+    q.distance(a + ab * t)
+}
+
+fn poly_dist(q: Pos2, pts: &[Pos2]) -> f32 {
+    pts.windows(2).map(|w| seg_dist(q, w[0], w[1])).fold(f32::INFINITY, f32::min)
+}
+
+fn cross(a: V3, b: V3) -> V3 {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn scale(a: V3, s: f32) -> V3 {
+    [a[0] * s, a[1] * s, a[2] * s]
+}
+
+fn norm(a: V3) -> V3 {
+    let l = dot(a, a).sqrt().max(1e-12);
+    scale(a, 1.0 / l)
+}
+
 fn add(a: V3, b: V3) -> V3 {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
@@ -653,6 +1010,61 @@ mod tests {
         let (_, up, _) = o.axes();
         let top = o.project(add(o.pivot, [up[0] * 2.0, up[1] * 2.0, up[2] * 2.0]), rect).unwrap();
         assert!(top.y > 0.0 && top.y < 30.0, "{top:?}");
+    }
+
+    #[test]
+    fn a_ray_through_a_projected_point_passes_through_it() {
+        let mut o = Orbit::new(Up::Y);
+        o.turn(0.3, -0.2);
+        let rect = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(640.0, 360.0));
+        let p = [0.4, -0.3, 0.7];
+        let (e, d) = o.ray(o.project(p, rect).unwrap(), rect);
+        let t = dot(sub(p, e), d);
+        let q = add(e, scale(d, t));
+        assert!(close(p, q), "{p:?} vs {q:?}");
+        // The line parameter of the nearest point recovers a point on an axis.
+        let (e, d) = o.ray(o.project([0.0, 2.0, 0.0], rect).unwrap(), rect);
+        assert!((line_param([0.0; 3], [0.0, 1.0, 0.0], e, d) - 2.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_square_is_picked_inside_and_not_outside() {
+        let mut o = Orbit { dist: 3.0, ..Orbit::new(Up::Y) };
+        o.snap(View::Front);
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 400.0));
+        let sq = [[-0.5, -0.5, 0.0], [0.5, -0.5, 0.0], [0.5, 0.5, 0.0], [-0.5, 0.5, 0.0]];
+        assert!((hit_loop(rect, &o, &sq, rect.center()).unwrap() - 3.0).abs() < 1e-3);
+        assert!(hit_loop(rect, &o, &sq, Pos2::new(5.0, 5.0)).is_none());
+    }
+
+    /// `cargo test --lib view3d_render -- --ignored`: the overlays, one
+    /// panel per manipulator, to `target/view3d.png`, to look at.
+    #[test]
+    #[ignore]
+    fn view3d_render() {
+        let style = Style::default();
+        let out = crate::uishot::render("view3d", 1200.0, 380.0, 2.0, 3, |ui, _| {
+            let all = ui.max_rect();
+            ui.painter().rect_filled(all, 0.0, Color32::from_gray(0x22));
+            let mut o = Orbit { dist: 4.0, ..Orbit::new(Up::Y) };
+            o.snap(View::Front);
+            o.turn(0.5, -0.35);
+            let card = [[-0.5, 0.0, -0.3], [0.5, 0.0, -0.3], [0.5, 0.75, -0.3], [-0.5, 0.75, -0.3]];
+            for (k, tool) in [Tool::Move, Tool::Rotate, Tool::Scale].into_iter().enumerate() {
+                let rect = Rect::from_min_size(Pos2::new(k as f32 * 400.0, 0.0), Vec2::new(396.0, 380.0));
+                let mut ui = ui.new_child(egui::UiBuilder::new().id_salt(k).max_rect(rect));
+                let ui = &mut ui;
+                let p = ui.painter_at(rect);
+                paint_grid(&p, rect, &o, &style);
+                paint_loop(&p, rect, &o, &card, Stroke::new(1.5, Color32::WHITE));
+                manipulator(ui, rect, &o, tool, [0.0, 0.375, -0.3], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], &style);
+                let mut g = o;
+                gizmo(ui, Pos2::new(rect.max.x - 48.0, 48.0), 34.0, &mut g, &style);
+            }
+        });
+        if out.is_none() {
+            println!("SKIP: no adapter");
+        }
     }
 
     #[test]

@@ -207,6 +207,13 @@ impl<Id> Default for Canvas<Id> {
 }
 
 impl<Id: Copy + Eq + std::hash::Hash + std::fmt::Debug> Canvas<Id> {
+    /// The app takes the press under way for itself (dragging something of
+    /// its own): no pick, box or move till the button is let go.
+    pub fn swallow_press(&mut self) {
+        self.swallow = true;
+        self.gesture = None;
+    }
+
     /// Is a G / R / S or a drag in progress (an app may hold its own keys).
     pub fn busy(&self) -> bool {
         self.gesture.is_some() || self.editing.is_some()
@@ -343,7 +350,7 @@ impl<Id: Copy + Eq + std::hash::Hash + std::fmt::Debug> Canvas<Id> {
     }
 
     fn snapshot<S: Scene<Id = Id>>(&self, scene: &S) -> Vec<(Id, Xform)> {
-        self.selection.iter().map(|&id| (id, scene.xform(id))).collect()
+        scene.group(&self.selection).into_iter().map(|id| (id, scene.xform(id))).collect()
     }
 
     fn keys_and_modal<S: Scene<Id = Id>>(&mut self, ui: &Ui, scene: &mut S, view: Rect, r: &Response, pointer: Option<Pos2>, out: &mut Out<Id>) {

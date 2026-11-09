@@ -29,6 +29,12 @@ pub trait Scene {
         self.local_rect(id).expand(tol).contains(local)
     }
 
+    /// What moves when `ids` are dragged, grabbed or rotated: `ids` and
+    /// anything tied to them (joined track, a group). Defaults to `ids`.
+    fn group(&self, ids: &[Self::Id]) -> Vec<Self::Id> {
+        ids.to_vec()
+    }
+
     /// Delete (X / Delete).
     fn remove(&mut self, ids: &[Self::Id]);
 

@@ -36,8 +36,9 @@ impl Shot {
     }
 
     pub fn save(&self, name: &str) -> std::path::PathBuf {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(format!("target/{name}.png"));
+        let dir = shot_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("{name}.png"));
         let file = std::fs::File::create(&path).unwrap();
         let mut enc =
             png::Encoder::new(std::io::BufWriter::new(file), self.w as u32, self.h as u32);
@@ -186,4 +187,19 @@ mod tests {
 /// delta is applied; this says the test knows better.
 pub fn discard(mut out: egui::FullOutput) {
     out.textures_delta.clear();
+}
+
+/// Where `save` writes: `CARGO_TARGET_DIR` if set, else the nearest `target/`
+/// above the working directory. Tests run in the package root, so this finds
+/// a workspace's shared target from a member crate, and works when this crate
+/// is a git dependency (its own manifest dir is then a read-only checkout).
+pub(crate) fn shot_dir() -> std::path::PathBuf {
+    if let Some(d) = std::env::var_os("CARGO_TARGET_DIR") {
+        return d.into();
+    }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    cwd.ancestors()
+        .map(|a| a.join("target"))
+        .find(|t| t.is_dir())
+        .unwrap_or_else(|| cwd.join("target"))
 }

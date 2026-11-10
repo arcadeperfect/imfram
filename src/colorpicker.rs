@@ -1177,7 +1177,7 @@ fn drag_2d(ui: &Ui, r: &Response, id: Id, cur: Pos2, spec: &PickSpec) -> Option<
 fn number(ui: &mut Ui, v: &mut f32, lo: f32, hi: f32, speed: f32, decimals: usize, spec: &PickSpec) -> bool {
     let before = *v;
     let rate = (spec.rate)(ui).unwrap_or(1.0);
-    crate::numfield::fixed(ui, NUM_W, NUM_H, egui::DragValue::new(v)
+    crate::numfield::fixed(ui, NUM_W, NUM_H, egui::DragValue::new(v).update_while_editing(false)
             .range(lo..=hi)
             .speed(speed * rate)
             .max_decimals(decimals),

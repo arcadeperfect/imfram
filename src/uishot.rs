@@ -36,12 +36,66 @@ pub fn render(
     h_pt: f32,
     ppp: f32,
     frames: usize,
-    mut build: impl FnMut(&mut egui::Ui, usize),
+    build: impl FnMut(&mut egui::Ui, usize),
 ) -> Option<PathBuf> {
-    let Some(gpu) = crate::shell::Gpu::standalone() else {
+    let clear = wgpu::Color { r: 0.043, g: 0.043, b: 0.043, a: 1.0 };
+    let Some((w, h, rgba)) = pixels(w_pt, h_pt, ppp, frames, clear, build) else {
         eprintln!("SKIP {name}: no adapter");
         return None;
     };
+    let rgb: Vec<u8> = rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+    let dir = crate::snapshot::shot_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(format!("{name}.png"));
+    let file = std::fs::File::create(&path).unwrap();
+    let mut png = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+    png.set_color(png::ColorType::Rgb);
+    png.set_depth(png::BitDepth::Eight);
+    png.write_header().unwrap().write_image_data(&rgb).unwrap();
+    eprintln!("wrote {}", path.display());
+    Some(path)
+}
+
+/// Render onto a TRANSPARENT canvas and hand back straight-alpha sRGB RGBA
+/// (egui's output is premultiplied; it is undone here, in linear light).
+pub fn render_rgba(
+    w_pt: f32,
+    h_pt: f32,
+    ppp: f32,
+    frames: usize,
+    build: impl FnMut(&mut egui::Ui, usize),
+) -> Option<(u32, u32, Vec<u8>)> {
+    let (w, h, mut px) = pixels(w_pt, h_pt, ppp, frames, wgpu::Color::TRANSPARENT, build)?;
+    let dec = |v: u8| {
+        let c = v as f32 / 255.0;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    let enc = |c: f32| {
+        let c = c.clamp(0.0, 1.0);
+        let v = if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
+        (v * 255.0 + 0.5) as u8
+    };
+    for p in px.chunks_exact_mut(4) {
+        let a = p[3] as f32 / 255.0;
+        if a > 0.0 && a < 1.0 {
+            for c in &mut p[..3] {
+                *c = enc(dec(*c) / a);
+            }
+        }
+    }
+    Some((w, h, px))
+}
+
+/// The last of `frames` passes as RGBA8 sRGB on `clear`; `None` without an adapter.
+fn pixels(
+    w_pt: f32,
+    h_pt: f32,
+    ppp: f32,
+    frames: usize,
+    clear: wgpu::Color,
+    mut build: impl FnMut(&mut egui::Ui, usize),
+) -> Option<(u32, u32, Vec<u8>)> {
+    let gpu = crate::shell::Gpu::standalone()?;
     let ctx = egui::Context::default();
     ctx.set_theme(egui::Theme::Dark);
     STYLE.with(|s| if let Some(f) = &*s.borrow() { f(&ctx) });
@@ -98,12 +152,7 @@ pub fn render(
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.043,
-                            g: 0.043,
-                            b: 0.043,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(clear),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -147,22 +196,12 @@ pub fn render(
     });
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
     rx.recv().ok()?.ok()?;
-    let mut rgb = Vec::with_capacity(w as usize * h as usize * 3);
+    let mut rgba = Vec::with_capacity(w as usize * h as usize * 4);
     {
         let data = buf.slice(..).get_mapped_range().ok()?;
         for y in 0..h as usize {
-            for px in data[y * padded..y * padded + unpadded].chunks_exact(4) {
-                rgb.extend_from_slice(&px[..3]);
-            }
+            rgba.extend_from_slice(&data[y * padded..y * padded + unpadded]);
         }
     }
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("target/{name}.png"));
-    let file = std::fs::File::create(&path).unwrap();
-    let mut png = png::Encoder::new(std::io::BufWriter::new(file), w, h);
-    png.set_color(png::ColorType::Rgb);
-    png.set_depth(png::BitDepth::Eight);
-    png.write_header().unwrap().write_image_data(&rgb).unwrap();
-    eprintln!("wrote {}", path.display());
-    Some(path)
+    Some((w, h, rgba))
 }

@@ -17,8 +17,8 @@
 //! | — | `rgb` / lane | intensity (the only axis that changes brightness) |
 //! | `G` | inverts gang | ganged grab -> that lane alone, and back |
 //! | `S` | `sat` | chroma about the working-space luma |
-//! | `D` | `temp` | orange <-> cyan (Nuke's T) |
-//! | `F` | `tint` | green <-> magenta (Nuke's M) |
+//! | `D` | `temp` | orange <-> cyan (temperature) |
+//! | `F` | `tint` | green <-> magenta (tint) |
 //!
 //! Keys are read LIVE, not latched at press: release `D` mid-drag and the
 //! same gesture goes back to moving intensity. Precedence when several are
@@ -97,8 +97,8 @@ const CHROMA_SPAN_OFFSET: f32 = 0.5;
 const CHROMA_SPAN_SCALE: f32 = 0.75;
 
 /// Colour-axis directions. `+d` is always the right-hand end of the drag:
-/// warmer, and more magenta — the Lightroom convention, which is Nuke's T
-/// and M with the sign that matches the way a hand expects to push.
+/// warmer, and more magenta — the Lightroom convention: temperature
+/// and tint with the sign that matches the way a hand expects to push.
 const WARM_DIR: [f32; 3] = [1.0, 0.0, -1.0];
 const TINT_DIR: [f32; 3] = [0.5, -1.0, 0.5];
 
@@ -718,7 +718,7 @@ pub fn show(
         );
         if let Some(dv) = driven {
             let mut val = dv[lane];
-            ui.put(nrect, egui::DragValue::new(&mut val).max_decimals(3))
+            ui.put(nrect, egui::DragValue::new(&mut val).update_while_editing(false).max_decimals(3))
                 .on_hover_text("driven by patch cable (live value)");
         } else {
             // The numbers honour the GANG, exactly like the rails above:
@@ -738,7 +738,7 @@ pub fn show(
             let was = val;
             let r = ui.put(
                 nrect,
-                egui::DragValue::new(&mut val)
+                egui::DragValue::new(&mut val).update_while_editing(false)
                     .speed(spec.speed as f64 * rate(ui).unwrap_or(1.0) as f64)
                     .max_decimals(3),
             );

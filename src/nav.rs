@@ -129,7 +129,47 @@ pub fn classify_wheel(events: &[egui::Event]) -> WheelNav {
 /// events on purpose: egui's `smooth_scroll_delta`/`zoom_delta` bake in
 /// their own ctrl-scroll-is-zoom opinion, which is not Blender's.
 pub fn wheel_nav(ui: &egui::Ui) -> WheelNav {
+    // A number field stepping under the wheel owns it (`numfield`).
+    if crate::numfield::wheel_claimed(ui.ctx()) {
+        return WheelNav { pan: Vec2::ZERO, zoom: 1.0, alt: false };
+    }
     ui.input(|i| classify_wheel(&i.events))
+}
+
+pub use crate::view3d::{classify_eye3d, Eye3d};
+
+/// The 3D eye's two-finger read for this frame's events (`view3d::classify_eye3d`).
+pub fn eye3d_nav(ui: &egui::Ui) -> Eye3d {
+    ui.input(|i| classify_eye3d(&i.events))
+}
+
+/// The wheel, trackpad and pinch over `rect` belong to the canvas drawing
+/// it this frame: the scroll area around it stops scrolling now, and a
+/// container that reads them before drawing stands down next frame
+/// (`owns_pointer`). Call while hovered.
+pub fn claim_wheel(ui: &egui::Ui, rect: egui::Rect) {
+    ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+    // Read the frame number BEFORE taking the data lock: egui's context
+    // lock is not re-entrant, and asking for it inside `data_mut` froze
+    // the app the moment a band plot was hovered.
+    let nr = ui.ctx().cumulative_frame_nr();
+    ui.ctx().data_mut(|d| d.insert_temp(claim_id(), (nr, rect)));
+}
+
+fn claim_id() -> egui::Id {
+    egui::Id::new("curveui-wheel-claim")
+}
+
+/// A canvas claimed the wheel last frame and the pointer is still over it:
+/// the wheel, trackpad and pinch are its navigation, so a container that
+/// reads them BEFORE the canvas draws (a properties grid's zoom) must stand
+/// down. One frame stale by construction, which a hover cannot notice.
+pub fn owns_pointer(ctx: &egui::Context) -> bool {
+    let Some((frame, rect)) = ctx.data(|d| d.get_temp::<(u64, egui::Rect)>(claim_id())) else {
+        return false;
+    };
+    ctx.cumulative_frame_nr() <= frame + 1
+        && ctx.pointer_latest_pos().is_some_and(|p| rect.contains(p))
 }
 
 /// A pointer press or release that a canvas claims before egui's widgets
@@ -198,6 +238,88 @@ const BUTTONS: [PointerButton; 5] = [
     PointerButton::Extra1,
     PointerButton::Extra2,
 ];
+
+/// One frame of a 1-D bar's navigation (a time bar, a range bar): the
+/// wheel and trackpad rules above, plus the drag chords (MMB / alt+LMB pan,
+/// ctrl+MMB / ctrl+alt+LMB zoom about the press). `view` is the frames the
+/// bar spans, left edge to right edge. Returns true while a nav drag holds
+/// the pointer, so the bar's own gestures (scrub, span drag) stand down.
+///
+/// The drag is read off raw pointer state, so it works over any widget the
+/// bar is made of; the wheel is claimed (`claim_wheel`) so the
+/// panel around the bar neither scrolls nor zooms under it.
+pub fn bar_nav(ui: &egui::Ui, id: egui::Id, rect: egui::Rect, view: &mut (f64, f64)) -> bool {
+    #[derive(Clone, Copy)]
+    struct Held {
+        nav: DragNav,
+        button: PointerButton,
+        press_x: f32,
+        last: egui::Pos2,
+    }
+    let n = (view.1 - view.0 + 1.0).max(1.0);
+    let px_per = rect.width().max(1.0) as f64 / n;
+    let zoom_about = |view: &mut (f64, f64), x: f32, z: f64| {
+        let n = (view.1 - view.0 + 1.0).max(1.0);
+        let at = view.0 + ((x - rect.min.x) as f64 / rect.width().max(1.0) as f64) * n;
+        let n2 = (n / z).clamp(4.0, 1.0e8);
+        let r = (at - view.0) / n;
+        view.0 = at - r * n2;
+        view.1 = view.0 + n2 - 1.0;
+    };
+    let (hover, mods, pressed, latest) = ui.input(|i| {
+        let pressed = [PointerButton::Primary, PointerButton::Middle, PointerButton::Secondary]
+            .into_iter()
+            .find(|b| i.pointer.button_pressed(*b));
+        (i.pointer.hover_pos(), i.modifiers, pressed, i.pointer.latest_pos())
+    });
+    let over = hover.is_some_and(|p| rect.contains(p));
+    let mut held: Option<Held> = ui.data(|d| d.get_temp(id));
+    if held.is_none() && over {
+        if let (Some(b), Some(p)) = (pressed, hover) {
+            if let Some(nav) = drag_nav(b, mods) {
+                held = Some(Held { nav, button: b, press_x: p.x, last: p });
+            }
+        }
+    }
+    if let Some(mut h) = held {
+        if ui.input(|i| i.pointer.button_down(h.button)) {
+            if let Some(p) = latest {
+                let d = p - h.last;
+                match h.nav {
+                    DragNav::Pan => {
+                        view.0 -= d.x as f64 / px_per;
+                        view.1 -= d.x as f64 / px_per;
+                    }
+                    DragNav::Zoom => zoom_about(view, h.press_x, drag_zoom(d) as f64),
+                }
+                h.last = p;
+            }
+            ui.ctx().set_cursor_icon(match h.nav {
+                DragNav::Pan => egui::CursorIcon::Grabbing,
+                DragNav::Zoom => egui::CursorIcon::ResizeHorizontal,
+            });
+            ui.data_mut(|d| d.insert_temp(id, h));
+            return true;
+        }
+        ui.data_mut(|d| d.remove::<Held>(id));
+        return false;
+    }
+    if over {
+        claim_wheel(ui, rect);
+        let w = wheel_nav(ui);
+        let pan = (w.pan.x + w.pan.y) as f64;
+        if pan != 0.0 {
+            view.0 -= pan / px_per;
+            view.1 -= pan / px_per;
+        }
+        if w.zoom != 1.0 {
+            if let Some(p) = hover {
+                zoom_about(view, p.x, w.zoom as f64);
+            }
+        }
+    }
+    false
+}
 
 #[cfg(test)]
 mod tests {
@@ -287,5 +409,24 @@ mod tests {
         f.process_at(&mut raw, |pos, b, m| canvas.contains(pos) && drag_nav(b, m).is_some());
         assert_eq!(f.presses.len(), 1, "the one over the canvas is claimed");
         assert_eq!(raw.events.len(), 1, "the one over a panel goes on to egui");
+    }
+
+    #[test]
+    fn over_a_3d_eye_two_fingers_orbit_like_blender() {
+        let none = Modifiers::default();
+        let shift = Modifiers { shift: true, ..Default::default() };
+        let ctrl = Modifiers { ctrl: true, ..Default::default() };
+        let swipe = |m| classify_eye3d(&[wheel(MouseWheelUnit::Point, [30.0, -12.0], m)]);
+        assert_eq!(swipe(none), Eye3d { orbit: egui::vec2(30.0, -12.0), pan: Vec2::ZERO });
+        assert_eq!(swipe(shift), Eye3d { orbit: Vec2::ZERO, pan: egui::vec2(30.0, -12.0) });
+        // ctrl+swipe is a zoom, and classify_wheel says so.
+        assert!(swipe(ctrl) == Eye3d::default());
+        let z = classify_wheel(&[wheel(MouseWheelUnit::Point, [0.0, 20.0], ctrl)]);
+        assert!(z.zoom > 1.0);
+        // A wheel notch still only zooms; ctrl/shift on it pan by axis.
+        assert!(classify_eye3d(&[wheel(MouseWheelUnit::Line, [0.0, 1.0], none)]) == Eye3d::default());
+        assert_eq!(classify_eye3d(&[wheel(MouseWheelUnit::Line, [0.0, 1.0], shift)]).pan, egui::vec2(0.0, LINE_PX));
+        // A pinch is zoom only.
+        assert!(classify_eye3d(&[egui::Event::Zoom(1.1)]) == Eye3d::default());
     }
 }

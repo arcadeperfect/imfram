@@ -1,3 +1,4 @@
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 //! Dragging a tab out of its window: past the window's edge, the window
 //! under the pointer (another of ours) lights up; let go over it and the
 //! tab docks there, over the desktop and it becomes a window of its own

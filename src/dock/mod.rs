@@ -30,13 +30,18 @@ mod viewer;
 use std::fmt::Debug;
 use std::hash::Hash;
 
+#[cfg(not(target_arch = "wasm32"))]
 use winit::event_loop::ActiveEventLoop;
+#[cfg(not(target_arch = "wasm32"))]
 use winit::window::WindowId;
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
+#[cfg(not(target_arch = "wasm32"))]
 use winit::window::Window;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::shell::{Gpu, UiWindow};
 
 pub use drag::Drag;
@@ -119,11 +124,40 @@ pub struct Saved<T, R> {
 /// A host's window: one of ours (`UiWindow`, drawn by `Docks::frame`), or
 /// the app's own (its main window, whose egui frame the app runs itself
 /// and draws the dock into with `Docks::draw_external`).
+///
+/// In a page (wasm) there is one host, the canvas, drawn into the page's
+/// egui frame: nothing to show, hide, title or place.
 pub enum HostWin {
+    #[cfg(not(target_arch = "wasm32"))]
     Own(UiWindow),
+    #[cfg(not(target_arch = "wasm32"))]
     External { window: Arc<Window>, ctx: egui::Context },
+    #[cfg(target_arch = "wasm32")]
+    Canvas { ctx: egui::Context },
 }
 
+#[cfg(target_arch = "wasm32")]
+impl HostWin {
+    pub fn ctx(&self) -> &egui::Context {
+        match self {
+            HostWin::Canvas { ctx } => ctx,
+        }
+    }
+    pub fn is_external(&self) -> bool {
+        true
+    }
+    pub fn is_visible(&self) -> bool {
+        true
+    }
+    pub fn request_repaint(&mut self) {
+        self.ctx().request_repaint();
+    }
+    pub fn show(&mut self) {}
+    pub fn toggle_visible(&mut self) {}
+    pub fn set_visible(&mut self, _show: bool) {}
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl HostWin {
     pub fn window(&self) -> &Window {
         match self {
@@ -234,6 +268,7 @@ impl<T: Tab> Docks<T> {
         Self { app, hosts: Vec::new(), asks: Vec::new(), drag: None, headless, drag_group: false }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// A window of `role` holding `dock`, shown. Returns its place among
     /// the hosts.
     pub fn add(&mut self, el: &ActiveEventLoop, gpu: &Gpu, role: T::Role, tree: Tree<T>) -> usize {
@@ -244,6 +279,7 @@ impl<T: Tab> Docks<T> {
         i
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// The app's own window as a host: the app runs its egui frame and
     /// draws the dock into it with `draw_external` (and feeds `raw_input`
     /// itself). Never retitled, never closed by the dock.
@@ -256,6 +292,7 @@ impl<T: Tab> Docks<T> {
         self.hosts[i].win.is_external()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Every one of our own windows clears to this colour.
     pub fn set_clear(&mut self, color: wgpu::Color) {
         for h in &mut self.hosts {
@@ -288,6 +325,7 @@ impl<T: Tab> Docks<T> {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// `add`, but the window starts hidden (until its key or a tab opens).
     pub fn add_hidden(&mut self, el: &ActiveEventLoop, gpu: &Gpu, role: T::Role, tree: Tree<T>) -> usize {
         let i = self.add(el, gpu, role, tree);
@@ -305,6 +343,7 @@ impl<T: Tab> Docks<T> {
         self.hosts.iter().position(|h| h.tree.find(tab).is_some())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn by_window(&self, id: WindowId) -> Option<usize> {
         self.hosts.iter().position(|h| h.win.id() == id)
     }
@@ -331,6 +370,7 @@ impl<T: Tab> Docks<T> {
             if carrying {
                 h.win.request_repaint();
             }
+            #[cfg(not(target_arch = "wasm32"))]
             if let Some(w) = h.win.own() {
                 w.poll();
             }
@@ -339,6 +379,10 @@ impl<T: Tab> Docks<T> {
 
     /// Tell window `i`'s egui where it is on the screen (a composer drag
     /// crossing windows reads it).
+    #[cfg(target_arch = "wasm32")]
+    fn place(&self, _i: usize) {}
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn place(&self, i: usize) {
         let win = self.hosts[i].win.window();
         if let Ok(o) = win.inner_position() {
@@ -383,9 +427,42 @@ impl<T: Tab> Docks<T> {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Take up what was asked. `el` makes windows for detached tabs
     /// (without it, a detached tab goes home).
     pub fn apply(&mut self, el: Option<&ActiveEventLoop>, gpu: &Gpu) {
+        self.apply_with(|d, tab, at| {
+            let Some(el) = el else { return };
+            if d.take(tab) {
+                let i = d.add(el, gpu, T::Role::detached(), Tree::new(vec![tab]));
+                if let Some(at) = at {
+                    // (Its title bar under the pointer, where it was let go.)
+                    let at = winit::dpi::PhysicalPosition::new(at[0] - 60.0, at[1] - 12.0);
+                    d.hosts[i].win.window().set_outer_position(at);
+                }
+                d.hosts[i].win.show();
+            }
+        });
+    }
+
+    /// The page's one host: the canvas, its dock drawn into the page's
+    /// egui frame with `draw_external`.
+    #[cfg(target_arch = "wasm32")]
+    pub fn add_canvas(&mut self, role: T::Role, ctx: egui::Context, tree: Tree<T>) -> usize {
+        self.hosts.push(Host { role, win: HostWin::Canvas { ctx }, tree, anim: Anim::default() });
+        self.hosts.len() - 1
+    }
+
+    /// Take up what was asked. In a page a tab cannot leave the canvas:
+    /// a detach leaves it where it is.
+    #[cfg(target_arch = "wasm32")]
+    pub fn apply(&mut self) {
+        self.apply_with(|_, _, _| {});
+    }
+
+    /// Take up what was asked; a detach goes to `detach` (the tab, and
+    /// where on the screen it was let go).
+    fn apply_with(&mut self, mut detach: impl FnMut(&mut Self, T, Option<[f64; 2]>)) {
         for ask in std::mem::take(&mut self.asks) {
             match ask {
                 Ask::Close(tab) => {
@@ -413,18 +490,8 @@ impl<T: Tab> Docks<T> {
                         self.hosts[to].tree.set_active(lead);
                     }
                 }
-                Ask::Detach(tab) | Ask::DetachAt(tab, _) => {
-                    let Some(el) = el else { continue };
-                    if self.take(tab) {
-                        let i = self.add(el, gpu, T::Role::detached(), Tree::new(vec![tab]));
-                        if let Ask::DetachAt(_, at) = ask {
-                            // (Its title bar under the pointer, where it was let go.)
-                            let at = winit::dpi::PhysicalPosition::new(at[0] - 60.0, at[1] - 12.0);
-                            self.hosts[i].win.window().set_outer_position(at);
-                        }
-                        self.hosts[i].win.show();
-                    }
-                }
+                Ask::Detach(tab) => detach(self, tab, None),
+                Ask::DetachAt(tab, at) => detach(self, tab, Some(at)),
             }
         }
         // A detached window left with nothing in it goes; the others keep
@@ -443,17 +510,27 @@ impl<T: Tab> Docks<T> {
             self.drag = dragged.map(|tab| Drag { tab, from: i, over: None, at: None, drop: None });
         }
         let Some(d) = self.drag.filter(|d| d.from == i) else { return };
-        let (win, ctx) = (self.hosts[i].win.window(), self.hosts[i].win.ctx());
+        let ctx = self.hosts[i].win.ctx();
         let (pos, up) = ctx.input(|inp| (inp.pointer.latest_pos(), !inp.pointer.primary_down()));
         let Some(pos) = pos else { return };
         let outside = !ctx.content_rect().contains(pos);
-        let screen = win.inner_position().ok().map(|o| {
-            let k = win.scale_factor();
-            [o.x as f64 + pos.x as f64 * k, o.y as f64 + pos.y as f64 * k]
-        });
+        // (In a page there is no screen past the canvas: a drag stays in it.)
+        #[cfg(target_arch = "wasm32")]
+        let screen: Option<[f64; 2]> = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        let screen = {
+            let win = self.hosts[i].win.window();
+            win.inner_position().ok().map(|o| {
+                let k = win.scale_factor();
+                [o.x as f64 + pos.x as f64 * k, o.y as f64 + pos.y as f64 * k]
+            })
+        };
         // (A pinned tab never leaves its window: past the edge it lands nowhere.)
         let outside = outside && !d.tab.pinned();
+        #[cfg(not(target_arch = "wasm32"))]
         let over = if outside { screen.and_then(|p| drag::under(&self.frames(), p, i)) } else { None };
+        #[cfg(target_arch = "wasm32")]
+        let over: Option<usize> = None;
         // (The window under the pointer draws the landing as it moves.)
         for w in [d.over, over].into_iter().flatten() {
             self.hosts[w].win.request_repaint();
@@ -479,6 +556,7 @@ impl<T: Tab> Docks<T> {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Window `i`'s frame, the usual way: its dock drawn through `panels`
     /// and presented (or, with `offscreen` events injected, rendered to a
     /// texture for a scripted test), then a tab dragged out tracked.
@@ -545,6 +623,7 @@ impl<T: Tab> Docks<T> {
         self.track(i, dragged);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// A window event for host `i`: redraws are the caller's (they need
     /// the panels: call `frame`); a close goes through `close_requested`;
     /// the rest reach egui. True if the caller should draw the window.
@@ -561,6 +640,7 @@ impl<T: Tab> Docks<T> {
         false
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Every window as it stands: for prefs. Detached windows included.
     pub fn save(&self) -> Layout<T, T::Role> {
         let windows = self
@@ -577,6 +657,7 @@ impl<T: Tab> Docks<T> {
         Layout { windows }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Windows as saved: one per entry, placed and sized as they were. A
     /// tab a saved layout does not know goes to its home window after.
     pub fn restore(&mut self, el: &ActiveEventLoop, gpu: &Gpu, layout: Layout<T, T::Role>) {
@@ -599,13 +680,22 @@ impl<T: Tab> Docks<T> {
     /// with the pointer in that window's points.
     pub fn dropping_into(&self, i: usize) -> Option<(T, egui::Pos2)> {
         let d = self.drag.filter(|d| d.over == Some(i))?;
-        let at = d.at?;
-        let win = self.hosts[i].win.window();
-        let o = win.inner_position().ok()?;
-        let k = win.scale_factor();
-        Some((d.tab, egui::pos2(((at[0] - o.x as f64) / k) as f32, ((at[1] - o.y as f64) / k) as f32)))
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = d;
+            None
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let at = d.at?;
+            let win = self.hosts[i].win.window();
+            let o = win.inner_position().ok()?;
+            let k = win.scale_factor();
+            Some((d.tab, egui::pos2(((at[0] - o.x as f64) / k) as f32, ((at[1] - o.y as f64) / k) as f32)))
+        }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Where each shown window is on the screen.
     fn frames(&self) -> Vec<(usize, drag::Frame)> {
         self.hosts
@@ -666,8 +756,11 @@ impl<T: Tab> Docks<T> {
         if self.hosts[i].win.is_external() {
             return;
         }
-        let t = self.title(&self.hosts[i]);
-        self.hosts[i].win.window().set_title(&t);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let t = self.title(&self.hosts[i]);
+            self.hosts[i].win.window().set_title(&t);
+        }
     }
 
     /// A window's title: its role's, or for a detached one what it holds.

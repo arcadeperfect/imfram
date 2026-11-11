@@ -7,22 +7,7 @@ use std::time::Duration;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
-use super::Gpu;
-
-/// The UI drawn in a layer each frame. A plain `FnMut(&mut egui::Ui)` works;
-/// implement the trait to also see the raw input before egui does.
-pub trait UiApp {
-    /// Runs once per frame before egui: claim or rewrite input events.
-    /// `ctx` is the layer's context (what has focus, the last pointer).
-    fn raw_input(&mut self, _ctx: &egui::Context, _raw: &mut egui::RawInput) {}
-    fn ui(&mut self, ui: &mut egui::Ui);
-}
-
-impl<F: FnMut(&mut egui::Ui)> UiApp for F {
-    fn ui(&mut self, ui: &mut egui::Ui) {
-        self(ui)
-    }
-}
+use super::{Gpu, UiApp};
 
 pub struct EguiLayer {
     ctx: egui::Context,

@@ -72,14 +72,14 @@ pub mod tiltmenu;
 pub mod view3d;
 pub mod widgets;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod dock;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod filebrowser;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod shell;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod uishot;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use shell::{EguiLayer, Gpu, UiApp, UiWindow};
+#[cfg(target_arch = "wasm32")]
+pub use shell::UiApp;

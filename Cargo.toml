@@ -6,6 +6,7 @@ name = "imfram"
 version = "0.1.0"
 edition = "2021"
 description = "The egui UI layer shared by wobble and graav: window shell, docking, tilt menus, widgets."
+license = "MIT"
 publish = false
 
 [features]

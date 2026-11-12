@@ -323,6 +323,7 @@ impl List {
                 p.rect_stroke(rect.shrink(0.5), 0.0, Stroke::new(1.0, look.text.gamma_multiply(0.5)), StrokeKind::Inside);
             }
         }
+        tile::drop_zone(ui, &resp, rect, items, i, look, ev);
         if resp.clicked() || resp.double_clicked() || resp.secondary_clicked() || resp.drag_started() {
             ui.memory_mut(|m| m.request_focus(id));
         }

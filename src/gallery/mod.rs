@@ -52,7 +52,7 @@ pub use list::{Details, List};
 pub use thumbs::{bucket, Request, Shown, Stats, Thumbs};
 
 pub const MIN_SIZE: f32 = 48.0;
-pub const MAX_SIZE: f32 = 640.0;
+pub const MAX_SIZE: f32 = 1024.0;
 /// One + or - press (and how far a wheel notch of zoom goes, roughly).
 pub const SIZE_STEP: f32 = 1.25;
 const GLIDE: f32 = 0.12;
@@ -97,6 +97,12 @@ pub trait Items {
     fn dim(&self, _i: usize) -> bool {
         false
     }
+    /// Takes a drop of dragged items (a folder): outlined while a
+    /// [`Dragged`] payload hovers it, and a release there comes back as
+    /// [`GalleryEvent::dropped`].
+    fn drop_target(&self, _i: usize) -> bool {
+        false
+    }
 }
 
 /// The drag-and-drop payload: the dragged items' ids, in grid order.
@@ -116,6 +122,8 @@ pub struct GalleryEvent {
     pub drag_started: bool,
     /// The list's sort changed: the source should sort itself.
     pub sort_changed: bool,
+    /// Dragged items let go over a [`Items::drop_target`] item (its id).
+    pub dropped: Option<(Option<u64>, Dragged)>,
 }
 
 pub(crate) struct BoxSel {

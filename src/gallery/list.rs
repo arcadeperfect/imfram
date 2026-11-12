@@ -69,6 +69,7 @@ pub struct List {
     /// The body's top left on screen last frame (tests find rows by it).
     pub(crate) origin: Pos2,
     shown_h: f32,
+    hovered: Option<u64>,
 }
 
 impl Default for List {
@@ -104,6 +105,7 @@ impl List {
             visible: 0..0,
             origin: Pos2::ZERO,
             shown_h: 36.0,
+            hovered: None,
         }
     }
 
@@ -114,6 +116,11 @@ impl List {
 
     pub fn cursor(&self) -> Option<usize> {
         self.cursor
+    }
+
+    /// The id of the row under the pointer, as of the last frame drawn.
+    pub fn hovered(&self) -> Option<u64> {
+        self.hovered
     }
 
     /// Bring item i into view next frame.
@@ -142,6 +149,7 @@ impl List {
 
     pub fn show<I: Details>(&mut self, ui: &mut Ui, items: &I, thumbs: &mut Thumbs<I::Src>) -> GalleryEvent {
         let mut ev = GalleryEvent::default();
+        self.hovered = None;
         let id = ui.make_persistent_id("imfram.list");
         let n = items.len();
         self.cursor = self.cursor.filter(|&c| c < n);
@@ -260,6 +268,9 @@ impl List {
         let iid = items.id(i);
         let rect = Rect::from_min_size(self.origin + vec2(0.0, i as f32 * row_h), vec2(width, row_h));
         let resp = ui.interact(rect, id.with(("row", iid)), Sense::click_and_drag());
+        if resp.hovered() {
+            self.hovered = Some(iid);
+        }
         let selected = self.selection.contains(&iid);
         let thumb_cell = Rect::from_min_size(rect.min, vec2(cols.thumb, row_h));
         let area = thumb_cell.shrink2(vec2(PAD, INSET));

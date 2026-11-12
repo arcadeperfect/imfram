@@ -24,7 +24,9 @@
 //! name, the app's [`Details`] columns), with the same hands and the same
 //! cache. [`files`] lists a folder with frame sequences grouped, and
 //! [`browse::FileView`] puts both views over it with a path bar: the
-//! pieces of a file browser like organisicator's.
+//! pieces of a file browser like organisicator's. [`nav`] is the chrome
+//! around them (a path bar with history and Tab completion, a folder
+//! tree, places) and [`typeahead`] jumps to a name as it is typed.
 //!
 //! Colours come from `Visuals`.
 
@@ -38,6 +40,8 @@ pub mod thumbs;
 pub mod files;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod browse;
+pub mod nav;
+pub mod typeahead;
 #[cfg(test)]
 mod tests;
 
@@ -156,6 +160,8 @@ pub struct Gallery {
     visible: Range<usize>,
     /// The content's top left on screen last frame (tests find tiles by it).
     pub(crate) origin: Pos2,
+    /// The item under the pointer last frame.
+    pub(crate) hovered: Option<u64>,
 }
 
 impl Default for Gallery {
@@ -176,6 +182,7 @@ impl Default for Gallery {
             scroll_y: 0.0,
             visible: 0..0,
             origin: Pos2::ZERO,
+            hovered: None,
         }
     }
 }
@@ -205,8 +212,14 @@ impl Gallery {
         self.scroll_to = Some(i);
     }
 
+    /// The id of the item under the pointer, as of the last frame drawn.
+    pub fn hovered(&self) -> Option<u64> {
+        self.hovered
+    }
+
     pub fn show<I: Items>(&mut self, ui: &mut Ui, items: &I, thumbs: &mut Thumbs<I::Src>) -> GalleryEvent {
         let mut ev = GalleryEvent::default();
+        self.hovered = None;
         let id = ui.make_persistent_id("imfram.gallery");
         let n = items.len();
         self.cursor = self.cursor.filter(|&c| c < n);

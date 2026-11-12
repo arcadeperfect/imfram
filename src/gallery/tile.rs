@@ -110,6 +110,9 @@ impl Gallery {
         let src = items.src(i);
         let frames = items.frames(i).max(1);
         let poster = items.poster(i).min(frames - 1);
+        if resp.hovered() {
+            self.hovered = Some(iid);
+        }
         let scrub_at = resp.hover_pos().filter(|_| self.scrub && frames > 1 && self.boxsel.is_none() && !resp.dragged());
         let (shown, scrub) = picture(thumbs, &mut self.hold, items, i, area, scrub_at, px, prio);
         let (label, kind, badge) = (items.label(i), items.kind(i), items.badge(i));

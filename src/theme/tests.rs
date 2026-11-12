@@ -201,3 +201,13 @@ fn render_window(name: &str) {
         egui::Frame::window(ui.style()).show(ui, |ui| theme_ui.contents(ui, &TABLE));
     });
 }
+
+#[test]
+fn windows_open_in_wobbles_dark() {
+    let ctx = egui::Context::default();
+    apply_dark(&ctx);
+    let v = ctx.style_of(egui::Theme::Dark).visuals.clone();
+    assert_eq!(v.panel_fill, Color32::from_gray(12));
+    assert_eq!(v.window_fill, Color32::from_gray(12), "windows follow the background");
+    assert_eq!(v.widgets.inactive.bg_fill, Color32::from_rgb(0x23, 0x2c, 0x2c));
+}

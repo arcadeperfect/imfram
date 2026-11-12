@@ -20,6 +20,9 @@ impl EguiLayer {
     /// (non-sRGB preferred: egui blends in gamma space).
     pub fn new(gpu: &Gpu, window: &Window, format: wgpu::TextureFormat) -> Self {
         let ctx = egui::Context::default();
+        // wobble's dark from the first frame; an app with its own theme
+        // table syncs over it.
+        crate::theme::apply_dark(&ctx);
         let state = egui_winit::State::new(
             ctx.clone(),
             egui::ViewportId::ROOT,

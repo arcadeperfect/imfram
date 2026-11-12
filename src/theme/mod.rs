@@ -65,3 +65,17 @@ pub use egui as __egui;
 pub type Overrides = std::sync::RwLock<Vec<Option<Color32>>>;
 
 crate::slots! { core; }
+
+/// The look imfram windows open with: wobble's dark (al's own overrides of
+/// the core table: a near-black background, dim borders, dark teal-grey
+/// buttons). Overrides, not new defaults, so every linked slot (windows,
+/// fields, canvases) moves with them exactly as it does in wobble.
+pub const DARK: &[(&str, &str)] = &[("bg", "#0c0c0c"), ("border", "#2d3033"), ("button", "#232c2c")];
+
+/// Write [`DARK`] into a context's dark visuals. The shell does this for
+/// every window it makes; an app with a table of its own syncs over it.
+pub fn apply_dark(ctx: &egui::Context) {
+    let map: std::collections::BTreeMap<String, String> = DARK.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let colours = TABLE.resolve(&TABLE.parse_overrides(&map));
+    ctx.style_mut_of(egui::Theme::Dark, |s| TABLE.write_visuals_from(&mut s.visuals, &colours));
+}

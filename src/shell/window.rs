@@ -143,6 +143,36 @@ impl UiWindow {
         }
     }
 
+    /// Let the presented frames be copied out (a screen recorder reads
+    /// them in `draw_with`), or stop. Off by default: on Metal `COPY_SRC`
+    /// costs the swapchain its framebuffer-only fast path.
+    pub fn set_copy_src(&mut self, gpu: &Gpu, on: bool) {
+        let usage = if on { wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC } else { wgpu::TextureUsages::RENDER_ATTACHMENT };
+        if self.config.usage != usage {
+            self.config.usage = usage;
+            self.surface.configure(&gpu.device, &self.config);
+        }
+    }
+
+    /// `draw`, handing the drawn frame's texture to `after` before it is
+    /// presented (it may record and submit a copy of it).
+    pub fn draw_with(&mut self, gpu: &Gpu, app: &mut dyn UiApp, after: &mut dyn FnMut(&wgpu::Texture)) {
+        use wgpu::CurrentSurfaceTexture as Cst;
+        let frame = match self.surface.get_current_texture() {
+            Cst::Success(f) | Cst::Suboptimal(f) => f,
+            Cst::Timeout | Cst::Occluded => return,
+            _ => {
+                self.surface.configure(&gpu.device, &self.config);
+                self.request_repaint();
+                return;
+            }
+        };
+        let target = frame.texture.create_view(&Default::default());
+        self.paint(gpu, &target, app);
+        after(&frame.texture);
+        gpu.queue.present(frame);
+    }
+
     /// Run one egui frame and present it.
     pub fn draw(&mut self, gpu: &Gpu, app: &mut dyn UiApp) {
         use wgpu::CurrentSurfaceTexture as Cst;

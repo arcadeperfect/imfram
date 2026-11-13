@@ -268,8 +268,27 @@ pub fn wmean(w: [f32; 3], v: [f32; 3]) -> f32 {
 ///
 /// `d` is in value units for `Rgb`/`Lane` (so the knob tracks the pointer)
 /// and in axis units for the colour axes.
+///
+/// The range is SOFT, like every slider's: a channel already past a bound
+/// (typed, or scrubbed there on its number field) is never pulled back to
+/// it — the clamp only stops a rail drag from carrying a channel further
+/// out than it started.
 pub fn nudge(v: [f32; 3], axis: Axis, d: f32, spec: RgbSpec) -> [f32; 3] {
-    let mut out = match axis {
+    let mut out = shift(v, axis, d, spec);
+    for (c, was) in out.iter_mut().zip(v) {
+        *c = c.clamp(spec.lo.min(was), spec.hi.max(was));
+    }
+    out
+}
+
+/// `nudge` with no clamp at all: the number fields, which (like a plain
+/// slider's value box) scrub straight past the rail's ends.
+pub fn nudge_free(v: [f32; 3], axis: Axis, d: f32, spec: RgbSpec) -> [f32; 3] {
+    shift(v, axis, d, spec)
+}
+
+fn shift(v: [f32; 3], axis: Axis, d: f32, spec: RgbSpec) -> [f32; 3] {
+    match axis {
         Axis::Rgb => [v[0] + d, v[1] + d, v[2] + d],
         Axis::Lane(i) => {
             let mut o = v;
@@ -279,11 +298,7 @@ pub fn nudge(v: [f32; 3], axis: Axis, d: f32, spec: RgbSpec) -> [f32; 3] {
             o
         }
         _ => chroma(v, axis, d, spec),
-    };
-    for c in &mut out {
-        *c = c.clamp(spec.lo, spec.hi);
     }
-    out
 }
 
 /// The colour axes: move, then put the luma back exactly.
@@ -558,6 +573,9 @@ pub struct RgbResponse {
     /// A ctrl-drag started on the widget: the caller spawns a HUD slider
     /// and no edit is applied.
     pub ctrl_drag: bool,
+    /// The three lanes' tracks (knob overhang included): where a caller
+    /// floats the range's bound fields, as over a plain slider's rail.
+    pub track: Rect,
 }
 
 /// Draw the lanes and handle the gesture.
@@ -578,7 +596,13 @@ pub fn show(
     let mods = Mods::read(ui);
     let ganged = *gang != mods.gang_invert;
     let mut out =
-        RgbResponse { changed: false, axis: Axis::Rgb, dragging: false, ctrl_drag: false };
+        RgbResponse {
+        changed: false,
+        axis: Axis::Rgb,
+        dragging: false,
+        ctrl_drag: false,
+        track: Rect::NOTHING,
+    };
 
     // Never collapse quietly: below this the row overflows its container,
     // which is visible, instead of degrading into a stub of a slider that
@@ -598,6 +622,10 @@ pub fn show(
         track_x0 + ((val - spec.lo) / (spec.hi - spec.lo)).clamp(0.0, 1.0) * track_w
     };
     let live = driven.is_none();
+    out.track = Rect::from_min_max(
+        egui::pos2(track_x0 - KNOB_R, lanes_top),
+        egui::pos2(track_x1 + KNOB_R, rect.max.y),
+    );
 
     // Gang toggle, mirroring the Grade HUD's G box: filled when ganged.
     let grect = Rect::from_center_size(
@@ -744,7 +772,7 @@ pub fn show(
             );
             if val != was {
                 let axis = if ganged { Axis::Rgb } else { Axis::Lane(lane) };
-                *v = nudge(*v, axis, val - was, spec);
+                *v = nudge_free(*v, axis, val - was, spec);
             }
             if r.dragged() {
                 out.dragging = true;
@@ -1082,6 +1110,19 @@ mod tests {
         assert_eq!(hot, [16.0, 16.0, 16.0]);
         let cold = nudge([0.1, 0.1, 0.1], Axis::Rgb, -4.0, scale());
         assert_eq!(cold, [0.0, 0.0, 0.0]);
+    }
+
+    /// Soft range: a channel already past a bound stays put under a rail
+    /// drag that pushes further out, and comes back freely; the number
+    /// fields' `nudge_free` crosses the bound outright.
+    #[test]
+    fn range_is_soft() {
+        let over = nudge([20.0, 1.0, 1.0], Axis::Rgb, 4.0, scale());
+        assert_eq!(over, [20.0, 5.0, 5.0]);
+        let back = nudge([20.0, 1.0, 1.0], Axis::Rgb, -2.0, scale());
+        assert_eq!(back, [18.0, 0.0, 0.0]);
+        let free = nudge_free([15.0, 15.0, 15.0], Axis::Lane(1), 4.0, scale());
+        assert_eq!(free, [15.0, 19.0, 15.0]);
     }
 
     #[test]
